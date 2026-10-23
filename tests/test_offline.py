@@ -432,6 +432,42 @@ def test_default_cv_is_reused_word_for_word_and_only_the_letter_is_written(monke
     assert generate.draft_application(ctx, "w", None, tailor_cv=True)["tailored_cv"]
 
 
+def test_rewrite_letter_keeps_the_cv_and_passes_on_the_problems_and_your_instruction(monkeypatch):
+    from cvdrafter import generate, memory
+    memory.init_db()
+    p = load_profile()
+    draft, _ = post_process(faithful_raw(p), p, LIMITS)
+    seen = []
+
+    def fake_writer(system, user, model, **k):
+        seen.append(user)
+        return {"cover_letter": [{"text": "A new first paragraph.", "sources": ["acme.1"]}],
+                "experience": {"acme": [{"text": "Invented", "sources": []}]}}
+    monkeypatch.setattr(generate, "chat_json", fake_writer)
+    ctx = dict(company="X", role="Y", jd="We use Python.", notes="", extra="", analysis=ANALYSIS, profile=p, app_id=None)
+    problems = [{"level": "error", "location": "cover_letter/1", "message": "Lists coursework"},
+                {"level": "error", "location": "company", "message": "Company is a guess"},
+                {"level": "error", "location": "experience/acme/1", "message": "CV problem"}]
+    result = generate.rewrite_letter(ctx, draft, "w", None, problems, "say when I graduate")
+    asked = seen[0].split("PROBLEMS:")[-1]
+    assert "Lists coursework" in asked and "say when I graduate" in asked
+    assert "Company is a guess" not in asked and "CV problem" not in asked  # not the letter's to fix
+    assert "Write ONLY the cover letter" in seen[0]
+    new = result["draft"]
+    assert new["cover_letter"][0]["text"] == "A new first paragraph."
+    assert {k: new[k] for k in generate.CV_SLOTS} == {k: draft[k] for k in generate.CV_SLOTS}  # the CV is untouched
+
+
+def test_cover_letter_template_has_the_cv_header_and_no_justified_text(tmp_path):
+    from docx import Document
+    p = load_profile()
+    draft, _ = post_process(faithful_raw(p), p, LIMITS)
+    out = render._render(config.CL_TEMPLATE, render.cl_context(draft, p, "Acme"), tmp_path / "cl.docx")
+    paras = Document(out).paragraphs
+    texts = [x.text for x in paras]
+    assert texts[1] == render._personal(p)["contact_line"] and texts.count(p["personal"]["name"]) == 1
+    assert not any(x.alignment == 3 for x in paras)  # justified text leaves gaps between words
+
 def _letter_errors(p, paragraph):
     raw = faithful_raw(p)
     raw["cover_letter"][0] = paragraph

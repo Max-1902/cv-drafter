@@ -25,8 +25,9 @@ CSS = """
 .b{display:flex;gap:.08in;padding-left:.05in}.b:before{content:'❖';font-size:7pt;line-height:14pt;width:.12in;flex:none}
 .b .t{flex:1}.b .rt{font-weight:bold;font-style:italic;margin-left:8pt}
 .changed{background:#fff3b0}
-.cl{font-size:11pt;padding:1in;line-height:1.25}.cl p{margin:0 0 8pt;text-align:justify}
-.cl .name{border-bottom:1px solid #000;padding-bottom:2pt;margin-bottom:18pt;font-size:16pt}
+.cl{font-size:12pt;padding:.75in 1in;line-height:1.1}.cl p{margin:0 0 10pt}
+.cl .name{margin:0 0 1pt}.cl .contact{border-bottom:1px solid #000;padding-bottom:4pt;margin-bottom:24pt}
+.cl .sign{margin-top:16pt;margin-bottom:28pt}
 </style>"""
 
 e = html.escape
@@ -76,11 +77,11 @@ def cv_html(draft: dict, profile: dict, changed: set[str] | None = None) -> str:
 def cl_html(draft: dict, profile: dict, company: str, recipient: str = "", address: str = "") -> str:
     ctx = cl_context(draft, profile, company, recipient, address)
     p = ctx["personal"]
-    out = [CSS, '<div class="page cl">', f'<p class="name">{e(p["name"].upper())}</p>', f"<p>{e(ctx['date'])}</p>",
+    out = [CSS, '<div class="page cl">', f'<p class="name">{e(p["name"].upper())}</p>',
+           f'<div class="contact">{e(p["contact_line"])}</div>', f"<p>{e(ctx['date'])}</p>",
            "<p>" + "<br>".join(e(l) for l in ctx["recipient_lines"]) + "</p>", f"<p>{e(ctx['salutation'])}</p>"]
     out += [f"<p>{e(par)}</p>" for par in ctx["paragraphs"]]
-    out.append(f"<p>{e(ctx['closing'])}<br>{e(p['name'])}<br>"
-               f"<span style='font-size:10pt'>{e(p.get('phone', ''))} | {e(p.get('email', ''))} | {e(p.get('github', ''))}</span></p></div>")
+    out.append(f"<p class='sign'>{e(ctx['closing'])}</p><p>{e(p['name'])}</p></div>")
     return "".join(out)
 
 

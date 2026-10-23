@@ -7,11 +7,14 @@ import sys
 
 import streamlit as st
 
-from cvdrafter import files, memory
+from cvdrafter import config, files, generate, memory
+from cvdrafter.llm import LLMError
 from cvdrafter.preview import word_diff
 from cvdrafter.render import cv_text
 from cvdrafter.textutil import safe
-from ui.common import DOCX_MIME, application_card, blocked_panel, bullets, load_profile_or_stop, render_checked, setup, show_issues
+from cvdrafter.verify import errors
+from ui.common import (DOCX_MIME, application_card, blocked_panel, bullets, load_profile_or_stop, models, render_checked, setup,
+                       show_issues)
 
 setup()
 st.title("History")
@@ -41,6 +44,72 @@ entries = files.history()
 
 # ---------------------------------------------------------------- generated (rendered or not)
 
+def letter_problems(key: str) -> list[dict]:
+    """The errors that stopped the last render and that a rewrite of the letter can fix (not the CV or the company)."""
+    ev = st.session_state.get(f"blocked_{key}") or {}
+    return [i for i in errors(ev.get("issues", [])) if not str(i["location"]).startswith((*generate.CV_SLOTS, "company"))]
+
+
+def letter_fixer(app: dict, draft: dict, key: str, profile: dict) -> None:
+    """Let the writer rewrite the letter: fix what the check found and follow your instructions. Saved as a new draft."""
+    problems = letter_problems(key)
+    with st.container(border=True):
+        st.markdown("**Rewrite the cover letter**")
+        st.caption("Only the letter is rewritten; the CV stays as it is. The new letter is checked again and saved as a "
+                   "new draft at the top of this list. This one stays.")
+        ask = st.text_area("Instructions (optional)", key=f"{key}_ask", height=80,
+                           placeholder="e.g. leave out the coursework, say when I graduate, one project per paragraph")
+        label = (f"Rewrite to fix {len(problems)} problem(s)" + (" + follow my instructions" if ask.strip() else "")
+                 if problems else "Rewrite with my instructions")
+        if not st.button(label, key=f"{key}_rewrite", type="primary", disabled=not problems and not ask.strip()):
+            return
+        m = models()
+        ctx = dict(company=app["company"], role=app["role"], jd=app["jd"] or "", notes=app["notes"] or "", extra="",
+                   analysis=app["analysis"] or {}, profile=profile, app_id=app["id"])
+        status = st.status("Rewriting the cover letter…", expanded=True)
+        try:
+            result = generate.rewrite_letter(ctx, draft, m["writer"], m["checker"] if m["llm_check"] else None, problems,
+                                             ask, progress=status.write)
+        except LLMError as e:
+            status.update(label="Failed", state="error")
+            st.error(str(e))
+            return
+        memory.update(app["id"], generated=result["draft"], final=None)  # final: the old edits belong to the old letter
+        st.session_state[f"rewrote_{app['id']}"] = result["issues"]
+        st.rerun()
+
+
+def rewrite_result(app_id: int) -> None:
+    """What the check said about the last rewrite, shown on the draft it produced."""
+    issues = st.session_state.get(f"rewrote_{app_id}")
+    if issues is None:
+        return
+    left = [i for i in errors(issues) if str(i["location"]).startswith("cover_letter")]
+    if left:
+        st.warning(f"Rewritten, but the check still finds {len(left)} problem(s) in the letter. Edit them in the "
+                   "Cover letter tab, or rewrite again with an instruction.")
+        show_issues(left)
+    else:
+        st.success("Rewritten. The check found no problems in the letter. Create the Word files when it reads right.")
+
+
+def letter_editor(app: dict, draft: dict, key: str) -> None:
+    """The newest letter, editable in place. Saved as your edit of this draft; the CV is untouched."""
+    paragraphs = draft["cover_letter"]
+    before = [p["text"].replace("**", "") for p in paragraphs]
+    texts = [st.text_area(f"Paragraph {n}", text, key=f"{key}_p{n}", height=150) for n, text in enumerate(before, 1)]
+    lo, hi = LIMITS["cl_words"]["min"], LIMITS["cl_words"]["max"]
+    words = sum(len(t.split()) for t in texts)
+    c1, c2 = st.columns([1, 3])
+    (c2.success if lo <= words <= hi else c2.warning)(f"{words} words (target {lo}–{hi})")
+    if c1.button("Save my edits", key=f"{key}_save", disabled=texts == before, width="stretch"):
+        letter = [{**p, "text": t.strip()} for p, t in zip(paragraphs, texts) if t.strip()]
+        memory.update(app["id"], final={**draft, "cover_letter": letter})
+        st.session_state.pop(f"blocked_{key}", None)  # the problems were about the old text; rendering checks again
+        st.session_state.pop(f"rewrote_{app['id']}", None)
+        st.rerun()
+
+
 generated = memory.drafts()
 st.subheader("Generated CVs + cover letters")
 st.caption("Every draft the writer produced, with when it was written. Regenerating adds a new one; earlier ones stay.")
@@ -48,6 +117,7 @@ if not generated:
     st.info("Each CV + cover letter you generate appears here, even before you create the Word files.")
 else:
     profile = load_profile_or_stop()
+    LIMITS = config.load_slots()["limits"]
     latest = {}  # app id -> its newest draft id
     for d in generated:
         latest.setdefault(d["app_id"], d["id"])
@@ -57,15 +127,25 @@ else:
         with st.expander(f"{stamp(d['at'])} · {d['company'] or '?'} · {d['role']} · {state}", expanded=i == 0):
             app = memory.get(d["app_id"])
             # The newest draft of an application carries the edits you made since; older ones render as written.
-            edited = d["id"] == latest[d["app_id"]] and app["final"]
+            newest = d["id"] == latest[d["app_id"]]
+            edited = newest and app["final"]
             draft = app["final"] if edited else d["draft"]
             key = f"gen{d['id']}"
-            render_now = st.button("Create Word files" + (" (with your edits)" if edited else ""), key=key, type="primary")
+            b1, b2, _ = st.columns([2, 2, 5])
+            render_now = b1.button("Create Word files" + (" (with your edits)" if edited else ""), key=key, type="primary",
+                                   width="stretch")
+            if newest and b2.button("Open in the editor", key=f"{key}_open", width="stretch",
+                                    help="Edit every CV bullet and letter paragraph with a live preview on the Apply page."):
+                st.session_state["open_app_id"] = app["id"]
+                st.switch_page("ui/new_app.py")
             if render_now or blocked_panel(key):
                 out = render_checked(app, draft, profile, key, override=not render_now, make_pdf=True)
                 if out:
                     memory.update(app["id"], files=out, status="ready" if app["status"] == "draft" else app["status"])
                 st.rerun()
+            fix_here = st.container()  # the rewrite box sits right under the problems when a render was stopped
+            if newest:
+                rewrite_result(app["id"])
             t1, t2 = st.tabs(["CV", "Cover letter"])
             with t1:
                 for section in cv_text(draft, profile):
@@ -74,8 +154,14 @@ else:
                         st.markdown(bullets(section["bullets"]))
             with t2:
                 paragraphs = [p["text"].replace("**", "") for p in draft["cover_letter"]]
-                for par in paragraphs:
-                    st.markdown(safe(par))
+                if newest:
+                    with fix_here if letter_problems(key) else t2:
+                        letter_fixer(app, draft, key, profile)
+                    letter_editor(app, draft, key)
+                else:
+                    st.caption("An earlier draft, kept as it was written. Edit or rewrite the newest one.")
+                    for par in paragraphs:
+                        st.markdown(safe(par))
                 with st.popover("Copy text"):
                     st.code("\n\n".join(paragraphs), language=None, wrap_lines=True)
 st.divider()

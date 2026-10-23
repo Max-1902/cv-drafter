@@ -175,6 +175,58 @@ def _with_cv(raw: dict, base: dict | None) -> dict:
     return {**raw, **{k: base[k] for k in ("experience", "projects", "skills")}} if base else raw
 
 
+CV_SLOTS = ("experience", "projects", "skills")
+
+
+def _prompts(ctx: dict, base: dict | None, limits: dict) -> tuple[str, str, int]:
+    """The writer's system and user prompts for this posting. base: the fixed CV when only the letter is written."""
+    profile, analysis = ctx["profile"], ctx["analysis"]
+    style_rules = config.STYLE_RULES_PATH.read_text(encoding="utf-8") if config.STYLE_RULES_PATH.exists() else ""
+    system = (_system(profile) + prompts.FACT_BANK.format(facts=facts_for_prompt(profile))
+              + prompts.STYLE_RULES.format(style_rules=style_rules or "(none yet)"))
+    sample = config.voice_sample()
+    if sample:
+        system += prompts.VOICE_SAMPLE.format(sample=sample)
+    examples = memory.similar_examples([k["term"] for k in analysis.get("keywords", [])], exclude_id=ctx.get("app_id"))
+    user = prompts.WRITER_USER.format(
+        company=ctx["company"], role=ctx["role"], jd=posting.core(ctx["jd"]), notes=ctx.get("notes") or "(none)",
+        analysis=_analysis_for_prompt(analysis),
+        examples=_examples_for_prompt(examples),
+        extra=ctx.get("extra") or "(none)",
+        schema=_schema(limits, profile, letter_only=base is not None),
+    )
+    return system, user, len(examples)
+
+
+def _fix(draft: dict, problems: list[str], system: str, user: str, base: dict | None, ctx: dict, limits: dict,
+         writer_model: str, task: str) -> tuple[dict, list[dict]]:
+    """One rewrite of the draft that addresses the listed problems."""
+    text = draft_text(draft)
+    keep = [k["term"] for k in ctx["analysis"].get("keywords", []) if k.get("in_profile") and has_term(k["term"], text)]
+    shown = {k: v for k, v in draft.items() if k not in CV_SLOTS} if base else draft
+    fix = prompts.FIX_USER.format(draft=json.dumps(shown, ensure_ascii=False, indent=1), problems="\n".join(problems),
+                                  keywords=", ".join(keep) or "(none)")
+    raw = chat_json(system, user + "\n\n" + fix, writer_model, temperature=0.2, effort="medium", task=task)
+    return post_process(_with_cv(raw, base), ctx["profile"], limits)
+
+
+def _check_and_fix(draft: dict, notes: list[dict], system: str, user: str, base: dict | None, ctx: dict, limits: dict,
+                   writer_model: str, checker_model: str | None, progress) -> tuple[dict, list[dict], int]:
+    """Fact-check, and let the writer fix the errors, up to MAX_FIX_ROUNDS times."""
+    rounds = 0
+    while True:
+        progress(f"Fact-checking (round {rounds + 1})…")
+        issues = run_checks(draft, ctx["profile"], ctx["analysis"], ctx["jd"], ctx.get("notes", ""), limits, checker_model)
+        # With a fixed CV the writer can only change the letter, so CV errors aren't sent back to it.
+        fixable = [i for i in errors(issues) if not (base and str(i["location"]).startswith(CV_SLOTS))]
+        if not fixable or rounds >= config.MAX_FIX_ROUNDS:
+            return draft, notes + issues, rounds
+        rounds += 1
+        progress(f"Fixing {len(fixable)} problem(s), round {rounds}…")
+        draft, notes = _fix(draft, [f"- [{i['location']}] {i['message']}" for i in fixable], system, user, base, ctx,
+                            limits, writer_model, f"fix round {rounds}")
+
+
 def draft_application(ctx: dict, writer_model: str, checker_model: str | None, progress=lambda msg: None,
                       tailor_cv: bool | None = None) -> dict:
     """ctx: company, role, jd, notes, extra, analysis, profile, app_id.
@@ -188,21 +240,7 @@ def draft_application(ctx: dict, writer_model: str, checker_model: str | None, p
     base = None if choice["tailor"] else default_cv.load(profile)
     if base is None:
         choice["tailor"] = True
-    style_rules = config.STYLE_RULES_PATH.read_text(encoding="utf-8") if config.STYLE_RULES_PATH.exists() else ""
-    system = (_system(profile) + prompts.FACT_BANK.format(facts=facts_for_prompt(profile))
-              + prompts.STYLE_RULES.format(style_rules=style_rules or "(none yet)"))
-    sample = config.voice_sample()
-    if sample:
-        system += prompts.VOICE_SAMPLE.format(sample=sample)
-    examples = memory.similar_examples([k["term"] for k in analysis.get("keywords", [])], exclude_id=ctx.get("app_id"))
-
-    user = prompts.WRITER_USER.format(
-        company=ctx["company"], role=ctx["role"], jd=posting.core(ctx["jd"]), notes=ctx.get("notes") or "(none)",
-        analysis=_analysis_for_prompt(analysis),
-        examples=_examples_for_prompt(examples),
-        extra=ctx.get("extra") or "(none)",
-        schema=_schema(limits, profile, letter_only=base is not None),
-    )
+    system, user, n_examples = _prompts(ctx, base, limits)
 
     if base:
         progress(f"Using your default CV ({choice['reason']}). Writing the cover letter…")
@@ -211,26 +249,29 @@ def draft_application(ctx: dict, writer_model: str, checker_model: str | None, p
     task = "write CV + letter" if base is None else "write letter (default CV)"
     raw = chat_json(system, user, writer_model, temperature=0.4, effort="medium", task=task)
     draft, pp_notes = post_process(_with_cv(raw, base), profile, limits)
-    rounds = 0
-    while True:
-        progress(f"Fact-checking (round {rounds + 1})…")
-        issues = run_checks(draft, profile, analysis, ctx["jd"], ctx.get("notes", ""), limits, checker_model)
-        if not errors(issues) or rounds >= config.MAX_FIX_ROUNDS:
-            break
-        rounds += 1
-        progress(f"Fixing {len(errors(issues))} problem(s), round {rounds}…")
-        problems = "\n".join(f"- [{i['location']}] {i['message']}" for i in errors(issues))
-        text = draft_text(draft)
-        keep = [k["term"] for k in analysis.get("keywords", []) if k.get("in_profile") and has_term(k["term"], text)]
-        shown = {k: v for k, v in draft.items() if k not in ("experience", "projects", "skills")} if base else draft
-        fix = prompts.FIX_USER.format(draft=json.dumps(shown, ensure_ascii=False, indent=1), problems=problems,
-                                      keywords=", ".join(keep) or "(none)")
-        raw = chat_json(system, user + "\n\n" + fix, writer_model, temperature=0.2, effort="medium",
-                        task=f"fix round {rounds}")
-        draft, pp_notes = post_process(_with_cv(raw, base), profile, limits)
-
-    return {"draft": draft, "issues": pp_notes + issues, "fix_rounds": rounds, "examples_used": len(examples),
+    draft, issues, rounds = _check_and_fix(draft, pp_notes, system, user, base, ctx, limits, writer_model, checker_model, progress)
+    return {"draft": draft, "issues": issues, "fix_rounds": rounds, "examples_used": n_examples,
             "tailored_cv": base is None, "cv_reason": choice["reason"]}
+
+
+def rewrite_letter(ctx: dict, draft: dict, writer_model: str, checker_model: str | None, problems: list[dict],
+                   instruction: str = "", progress=lambda msg: None) -> dict:
+    """Rewrite only the cover letter of an existing draft: fix `problems` (issues from a check) and follow your
+    instruction. The CV stays exactly as it is. ctx: as for draft_application."""
+    limits = config.load_slots()["limits"]
+    base = {k: draft[k] for k in CV_SLOTS}
+    instruction = instruction.strip()
+    system, user, n_examples = _prompts({**ctx, "extra": instruction or ctx.get("extra")}, base, limits)
+    # The CV is fixed here, and a guessed company name isn't the letter's to fix.
+    asks = [f"- [{i['location']}] {i['message']}" for i in problems if not str(i["location"]).startswith((*CV_SLOTS, "company"))]
+    if instruction:
+        asks.append(f"- [cover_letter] The candidate asks for this change: {instruction}")
+    if not asks:
+        asks.append("- [cover_letter] Rewrite the cover letter: keep every fact, make it read better.")
+    progress("Rewriting the cover letter…")
+    new, notes = _fix(draft, asks, system, user, base, ctx, limits, writer_model, "rewrite letter")
+    new, issues, rounds = _check_and_fix(new, notes, system, user, base, ctx, limits, writer_model, checker_model, progress)
+    return {"draft": new, "issues": issues, "fix_rounds": rounds, "examples_used": n_examples}
 
 
 def apply_edits(draft: dict, edits: dict[str, str], excluded: set[str] | frozenset = frozenset()) -> dict:

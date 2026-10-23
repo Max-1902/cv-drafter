@@ -136,3 +136,37 @@ def test_history_shows_status_and_flags():
     assert any("Rendered despite errors" in l and "1 flag" in l for l in labels)  # the CV entry
     assert any("Rendered despite errors" in l and "flag" not in l for l in labels)  # the letter: the flag was on the CV
     assert at.metric[2].value == "1"
+
+
+def test_history_lets_you_rewrite_or_edit_a_blocked_letter(seeded_db, monkeypatch):
+    from cvdrafter import generate
+    app = memory.get(seeded_db)
+    memory.update(seeded_db, final={**app["final"], "cover_letter": [{"text": "I am passionate.", "sources": ["acme.1"]}]})
+    asked = []
+
+    def fake_rewrite(ctx, draft, writer, checker, problems, instruction="", progress=None):
+        asked.append((problems, instruction))
+        return {"draft": {**draft, "cover_letter": [{"text": "A plain new letter.", "sources": ["acme.1"]}]}, "issues": []}
+    monkeypatch.setattr(generate, "rewrite_letter", fake_rewrite)
+    at = AppTest.from_file(str(config.ROOT / "ui/history_page.py"), default_timeout=30)
+    at.session_state["llm_check"] = False
+    at.run()
+    next(b for b in at.button if b.label.startswith("Create Word files")).click().run()
+    assert not at.exception, at.exception
+    assert any("Not rendered" in e.value for e in at.error) and not memory.get(seeded_db)["files"]
+    rewrite = next(b for b in at.button if b.label.startswith("Rewrite to fix"))
+    next(t for t in at.text_area if t.label == "Instructions (optional)").input("shorter")
+    rewrite.click().run()
+    assert not at.exception, at.exception
+    assert asked and asked[0][1] == "shorter" and all(i["location"].startswith("cover_letter") for i in asked[0][0])
+    app = memory.get(seeded_db)
+    assert app["final"] is None and app["generated"]["cover_letter"][0]["text"] == "A plain new letter."
+    assert len(memory.drafts(seeded_db)) == 2  # the old draft is kept
+
+    paragraph = next(t for t in at.text_area if t.value == "A plain new letter.")
+    paragraph.input("My own wording.")
+    at.run()
+    next(b for b in at.button if b.label == "Save my edits").click().run()
+    assert not at.exception, at.exception
+    assert memory.get(seeded_db)["final"]["cover_letter"][0]["text"] == "My own wording."
+    assert any(b.label == "Create Word files (with your edits)" for b in at.button)
