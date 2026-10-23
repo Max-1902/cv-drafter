@@ -32,9 +32,20 @@ your edits.
    transcripts) or just type it: *"I also tutored maths for two years"*.
 5. **Apply:** paste a job posting, say *write it*, download your CV and cover letter.
 
-Your data never leaves your Mac except for the AI calls (it lives in `~/Library/Application Support/CV Drafter`).
-Closing the app or installing a newer version keeps everything: applications, fact bank, chats and documents.
 To stop it, click **Quit CV Drafter** at the bottom of the left menu.
+
+### Your history is yours alone
+
+The download contains only code, so everyone starts with an empty app. As you use it, it builds your own history:
+your fact bank, every application and its status, your chats, learned style rules and every CV and cover letter it
+writes. All of it lives on your Mac in `~/Library/Application Support/CV Drafter`.
+
+- **Nothing is uploaded or shared.** The app has no account, sync or analytics. No one else who uses CV Drafter,
+  including whoever sent it to you, can see your data. The only thing that leaves your Mac is the text sent to the AI
+  you connect (Claude, Anthropic or OpenRouter).
+- **Updates keep it.** Closing the app or installing a newer version never touches your data, keys or documents.
+- **Start over anytime.** Quit the app and delete `~/Library/Application Support/CV Drafter/data` (and `output` for the
+  generated documents). The next start is a fresh install.
 
 | Connect your Claude plan | Add facts by chatting or dropping files |
 |---|---|
@@ -61,7 +72,10 @@ actions. Common commands (*applied*, *status interview*, *pdf*) need no AI at al
 3. **Locked fields**: names, titles, dates, education, contact details and skill names come from your profile, never from the AI.
 4. **Rule-based checks** (code, not AI): numbers must appear in the cited facts. Keywords from the posting that aren't
    in your profile are blocked. Skills can only be reordered, never added. Never-mention terms, banned phrases,
-   length limits and the cover-letter word count are all checked.
+   length limits and the cover-letter word count are all checked. Cover-letter paragraphs are checked for how true
+   facts are put together: one project per paragraph, no fact or opinion next to a different project's work (tag a
+   general fact with `about: <entry id>` to tie it to one), no coursework list and no "finishing my degree" when
+   graduation is more than six months away.
 5. **AI fact-checker**: a separate AI pass compares each statement with its sources and your claim guards
    (`data/guardrails.yaml`).
 6. **Fix loop**: problems go back to the writer automatically (`MAX_FIX_ROUNDS`). Anything left over is shown to you.
@@ -75,8 +89,8 @@ actions. Common commands (*applied*, *status interview*, *pdf*) need no AI at al
 ## Privacy
 
 - The dashboard only listens on `localhost` (`.streamlit/config.toml`), so other devices on your network can't open it.
-- Your personal files (`data/profile.yaml`, `learned_facts.yaml`, `guardrails.yaml`, `style_rules.md`, `.versions/`,
-  `applications.db`) and `.env` are in `.gitignore`. The tests use the fictional profile in `tests/fixtures/`.
+- When you run from source, the whole `data/` folder, `output/` and `.env` are in `.gitignore`, so your personal files
+  can't be committed. The tests use the fictional profile in `tests/fixtures/`.
 - AI requests go only to the provider you connected. With OpenRouter, only to providers that don't store or train on
   your data (`data_collection: deny`).
   The CV importer removes your email and phone number before sending the text.
