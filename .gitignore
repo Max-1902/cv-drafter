@@ -6,17 +6,6 @@ __pycache__/
 .pytest_cache/
 output/
 
-# Personal data: never commit
-data/profile.yaml
-data/learned_facts.yaml
-data/guardrails.yaml
-data/style_rules.md
-data/voice_sample.md
-data/.versions/
-data/applications.db*
-data/*.backup.yaml
-data/settings.json
-data/.openrouter_models.json
-data/references/
+# Personal data: never commit anything under data/ (fact bank, references, applications, CVs)
+data/
 dist/
-data/chats/
