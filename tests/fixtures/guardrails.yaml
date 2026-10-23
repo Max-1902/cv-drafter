@@ -1,0 +1,6 @@
+never_mention:
+  - in production
+banned_phrases:
+  - passionate
+claim_guards:
+  - The classifier is not in production.

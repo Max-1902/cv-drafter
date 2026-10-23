@@ -1,0 +1,27 @@
+CV Drafter: tailored CVs and cover letters, written only from facts about you
+==========================================================================
+
+1. Drag "CV Drafter" into your Applications folder (optional, but tidy).
+
+2. Double-click CV Drafter.
+
+   The first time, macOS may say it can't check the app for malicious software
+   (it isn't from the App Store). That's expected. To allow it, once:
+     - Click "Done" (or "OK") in that message.
+     - Open System Settings > Privacy & Security, scroll down, and click
+       "Open Anyway" next to CV Drafter. Confirm with your password or Touch ID.
+   (On older macOS: right-click CV Drafter > Open > Open.)
+
+3. Your browser opens. The first start sets everything up (about 2 minutes,
+   it needs internet). After that, it starts in seconds.
+
+4. In the app:
+   - Connect AI: click "Install Claude", then "Sign in with Claude" and log in
+     with your Claude Pro or Max account. No API key needed.
+   - Your profile: drop your CV into the chat. Then add anything else
+     (reference letters, certificates, or just type extra facts).
+   - Apply: paste a job posting. Done.
+
+Your data stays on your Mac (in ~/Library/Application Support/CV Drafter).
+To stop the app, click "Quit CV Drafter" at the bottom of the left menu.
+To update, replace the app with a newer download; your data is kept.

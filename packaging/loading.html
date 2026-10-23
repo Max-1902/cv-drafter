@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CV Drafter is starting</title>
+<style>
+  :root { --bg:#0b1117; --card:#121b24; --line:#293744; --ink:#e5edf4; --muted:#91a0ae; --teal:#37b7d2; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--ink);
+         font:16px/1.5 -apple-system, BlinkMacSystemFont, "Inter", sans-serif; }
+  .card { max-width:440px; margin:16px; padding:32px; background:var(--card); border:1px solid var(--line);
+          border-left:3px solid var(--teal); border-radius:8px; }
+  h1 { font-size:1.4rem; margin:0 0 .4rem; letter-spacing:-.02em; }
+  p { color:var(--muted); margin:.4rem 0; }
+  .bar { height:4px; background:var(--line); border-radius:2px; overflow:hidden; margin:1.4rem 0 .6rem; }
+  .bar i { display:block; height:100%; width:30%; background:var(--teal); border-radius:2px;
+           animation:slide 1.4s ease-in-out infinite; }
+  @keyframes slide { 0% { margin-left:-30%; } 100% { margin-left:100%; } }
+  small { color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>CV Drafter is starting…</h1>
+  <p>The very first start sets everything up and takes about 2 minutes. After that it opens in a few seconds.</p>
+  <div class="bar"><i></i></div>
+  <small id="status">Getting ready. This page switches to the app by itself.</small>
+</div>
+<script>
+  const port = new URLSearchParams(location.search).get("port") || "8765";
+  const url = "http://localhost:" + port;
+  const started = Date.now();
+  async function check() {
+    try {
+      await fetch(url + "/_stcore/health", { mode: "no-cors", cache: "no-store" });
+      location.replace(url);
+      return;
+    } catch (e) { /* not up yet */ }
+    const s = Math.round((Date.now() - started) / 1000);
+    if (s > 60) document.getElementById("status").textContent =
+      "Still setting up (" + s + "s). First start downloads about 150 MB, so it depends on your internet.";
+    setTimeout(check, 1500);
+  }
+  check();
+</script>
+</body>
+</html>

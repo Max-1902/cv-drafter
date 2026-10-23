@@ -1,0 +1,71 @@
+# Fictional sample profile for the tests. Never put real personal data here.
+personal:
+  name: Jane Doe
+  location: Springfield, IL
+  phone: 555-0100
+  email: jane@example.com
+  github: github.com/janedoe
+  linkedin:
+
+education:
+  - id: state_u
+    institution: State University
+    location: Springfield, IL
+    dates: Expected June 2027
+    degree: Master of Science in Computer Science
+    gpa: "GPA: 3.9/4.0"
+    coursework: Algorithms, Operating Systems
+    facts: []
+
+experience:
+  - id: acme
+    company: Acme Bank
+    title: Software Engineering Intern
+    location: Chicago, IL
+    dates: Jun 2024 – Sep 2024
+    max_bullets: 4
+    facts:
+      - id: acme.1
+        text: Built a Python news classifier that tags 3 asset classes
+        skills: [Python]
+      - id: acme.2
+        text: Wrote 120 unit tests for the reporting service
+        skills: [Java]
+      - id: acme.3
+        text: Built a Java rule engine encoding 40+ bank-specific rules
+        skills: [Java]
+  - id: beta
+    company: Beta Analytics
+    title: Data Analyst Intern
+    location: Remote
+    dates: Jan 2023 – May 2023
+    facts:
+      - id: beta.1
+        text: Cleaned survey data for 2 research teams
+        skills: [SQL]
+      - id: beta.2
+        text: Automated a weekly SQL report
+
+projects:
+  - id: rag
+    name: Local RAG Pipeline
+    stack: Python, FAISS
+    max_bullets: 2
+    facts:
+      - Evaluated retrieval on 65 hand-written questions
+      - Compared 3 embedding models
+  - id: forecast
+    name: Forecasting System
+    stack: Python
+    facts:
+      - Forecast monthly inflation with 4 model families
+
+skills:
+  Programming: [Python, Java, SQL]
+  Tools: [Git, Docker]
+
+languages:
+  - English (native)
+activities: []
+general_facts:
+  - Graduating in June 2027

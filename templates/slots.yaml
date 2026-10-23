@@ -1,0 +1,18 @@
+# Text-slot limits. They keep the tailored text inside the one-page layout of cv_template.docx.
+limits:
+  bullet_chars: 215            # ~2 lines at the template's width
+  bullets_per_job: {min: 2, max: 6}     # per-job cap: max_bullets in profile.yaml
+  projects: {min: 2, max: 3}            # per-project cap: max_bullets in profile.yaml
+  bullets_per_project: 4
+  max_skill_categories: 5
+  max_skills_per_category: 10
+  cl_paragraphs: {min: 3, max: 4}
+  cl_paragraph_chars: 900
+  cl_words: {min: 280, max: 350}        # outside this range -> warning; 20 words further -> error
+
+labels:
+  present: Present
+  salutation_named: "Dear {name},"
+  salutation_generic: "Dear Hiring Manager,"
+  closing: "Sincerely,"
+  languages_activities: "Languages & Activities"

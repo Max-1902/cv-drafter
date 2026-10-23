@@ -1,0 +1,22 @@
+[theme]
+primaryColor = "#37b7d2"
+font = "sans serif"
+base = "dark"
+backgroundColor = "#0b1117"
+secondaryBackgroundColor = "#121b24"
+textColor = "#e5edf4"
+# 16px (the default) made the app look oversized; 14px matches a normal desktop app.
+baseFontSize = 14
+
+[server]
+# Only this Mac can open the dashboard. Without this, anyone on the same network can.
+address = "localhost"
+headless = true
+runOnSave = true
+
+[client]
+# No Streamlit "Deploy" button; this app only runs on your Mac.
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
