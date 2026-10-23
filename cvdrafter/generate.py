@@ -8,7 +8,7 @@ from . import config, default_cv, memory, posting, prompts
 from .llm import chat_json
 from .profile import candidate_name, facts_for_prompt, graduation, load_guardrails, skill_lookup
 from .textutil import has_term
-from .verify import draft_text, errors, issue, run_checks
+from .verify import draft_text, errors, issue, iter_items, run_checks
 
 
 def _schema(limits: dict, profile: dict, letter_only: bool = False) -> str:
@@ -178,15 +178,19 @@ def _with_cv(raw: dict, base: dict | None) -> dict:
 CV_SLOTS = ("experience", "projects", "skills")
 
 
-def _prompts(ctx: dict, base: dict | None, limits: dict) -> tuple[str, str, int]:
-    """The writer's system and user prompts for this posting. base: the fixed CV when only the letter is written."""
-    profile, analysis = ctx["profile"], ctx["analysis"]
+def writer_system(profile: dict) -> str:
+    """The writer's rules plus fact bank, style rules and voice sample."""
     style_rules = config.STYLE_RULES_PATH.read_text(encoding="utf-8") if config.STYLE_RULES_PATH.exists() else ""
     system = (_system(profile) + prompts.FACT_BANK.format(facts=facts_for_prompt(profile))
               + prompts.STYLE_RULES.format(style_rules=style_rules or "(none yet)"))
     sample = config.voice_sample()
-    if sample:
-        system += prompts.VOICE_SAMPLE.format(sample=sample)
+    return system + prompts.VOICE_SAMPLE.format(sample=sample) if sample else system
+
+
+def _prompts(ctx: dict, base: dict | None, limits: dict) -> tuple[str, str, int]:
+    """The writer's system and user prompts for this posting. base: the fixed CV when only the letter is written."""
+    profile, analysis = ctx["profile"], ctx["analysis"]
+    system = writer_system(profile)
     examples = memory.similar_examples([k["term"] for k in analysis.get("keywords", [])], exclude_id=ctx.get("app_id"))
     user = prompts.WRITER_USER.format(
         company=ctx["company"], role=ctx["role"], jd=posting.core(ctx["jd"]), notes=ctx.get("notes") or "(none)",
@@ -272,6 +276,29 @@ def rewrite_letter(ctx: dict, draft: dict, writer_model: str, checker_model: str
     new, notes = _fix(draft, asks, system, user, base, ctx, limits, writer_model, "rewrite letter")
     new, issues, rounds = _check_and_fix(new, notes, system, user, base, ctx, limits, writer_model, checker_model, progress)
     return {"draft": new, "issues": issues, "fix_rounds": rounds, "examples_used": n_examples}
+
+
+def revise_texts(ctx: dict, draft: dict, request: str, history: list[dict], writer_model: str) -> dict:
+    """Chat edits in the editor: change only the texts `request` is about. Returns {"edits": {location: text},
+    "reply": str}. Only existing locations can change and sources stay as they are, so the fact check still compares
+    each text with the facts it cited. history: earlier [{"role", "content"}] turns. ctx: as for draft_application."""
+    limits = config.load_slots()["limits"]
+    current = {loc: item for loc, _, item, _ in iter_items(draft)}
+    user = prompts.REVISE_USER.format(
+        bullet_chars=limits["bullet_chars"], cl_chars=limits["cl_paragraph_chars"],
+        cl_words_min=limits["cl_words"]["min"], cl_words_max=limits["cl_words"]["max"],
+        company=ctx["company"], role=ctx["role"], jd=posting.core(ctx["jd"]),
+        texts="\n".join(f"- {loc} · {', '.join(i['sources']) or '(none)'} · {i['text']}" for loc, i in current.items()),
+        history="\n".join(f"{m['role']}: {m['content']}" for m in history[-8:]) or "(none)", request=request.strip(),
+    )
+    raw = _dict(chat_json(writer_system(ctx["profile"]), user, writer_model, temperature=0.2, effort="medium",
+                          task="editor chat"))
+    edits = {}
+    for e in _list(raw.get("edits")):
+        loc, text = (str(e.get("location") or "").strip(), str(e.get("text") or "").strip()) if isinstance(e, dict) else ("", "")
+        if loc in current and text and text != current[loc]["text"]:
+            edits[loc] = text
+    return {"edits": edits, "reply": str(raw.get("reply") or "").strip()}
 
 
 def apply_edits(draft: dict, edits: dict[str, str], excluded: set[str] | frozenset = frozenset()) -> dict:

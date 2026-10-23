@@ -97,6 +97,23 @@ actions. Common commands (*applied*, *status interview*, *pdf*) need no AI at al
 - Text from job postings and the AI is escaped before it is shown, so a malicious posting can't inject HTML or
   images that would send your data to another site.
 
+## Fit verdict
+
+Every pasted posting gets a verdict (Strong fit, Good fit, Stretch or Not a fit) and a 0–100 score at the top right of the Apply page and in the Detailed editor. The AI only maps each requirement to your facts; the verdict itself is fixed logic in `cvdrafter/fit.py`, so it's the same every time and you can see why:
+
+- Must-haves count 3x, nice-to-haves 1x, soft skills half.
+- Direct evidence earns full credit. A fair interpretation (four years of varsity sport for discipline) earns 80%, partial evidence 50%.
+- Logistics (location, dates, graduation window, work authorization) are pass/fail: a missed must-have, or a mid/senior role, makes it Not a fit.
+- Strong fit needs every must-have met; one missing hard must-have caps it at Good, two at Stretch.
+
+If the AI undersells you, open "Why this verdict" and confirm that one of your facts shows a skill or trait (team captain → leadership). It's saved in `data/interpretations.yaml` and from then on every requirement that names it counts as met. Interpretations only affect the verdict: your CV and letter still say only what your facts say.
+
+## More on the Apply page
+
+- **Duplicate postings**: paste a posting (or link) you already have and the app opens the existing application instead of logging and analysing it again. The same company and role from a different posting is flagged too.
+- **Application questions**: paste a form's questions ("Why this role? (max 500 characters)") and get short answers written from your facts in your letter's voice, checked like the letter and kept within each question's limit.
+- **Ask AI to change something** (Detailed editor): edit the CV and letter texts from a chat message, only within each text's cited facts. The fact check re-runs, and you can undo it.
+
 ## How the design stays fixed
 
 `templates/cv_template.docx` recreates your CV's design with text slots. The AI only fills those slots, so it can't
@@ -120,6 +137,7 @@ data/profile.yaml        your fact bank (edit it on the Your profile page)
 data/guardrails.yaml     never-mention terms, banned phrases, claim guards
 data/style_rules.md      voice and structure rules (grows over time)
 data/learned_facts.yaml  facts added from gap questions
+data/interpretations.yaml  traits you confirmed a fact shows (fit verdict only)
 data/applications.db     history (SQLite)
 data/.versions/          automatic backups of every file you edit in the app
 templates/               cv_template.docx, cl_template.docx, slots.yaml (layout limits)

@@ -9,6 +9,12 @@ FACT_BANK = """
 CANDIDATE FACT BANK (ids are what you cite):
 {facts}"""
 
+INTERPRETATIONS = """
+
+INTERPRETATIONS THE CANDIDATE CONFIRMED (true; a requirement asking for one of these is "covered" with evidence \
+"transferable", citing that fact):
+{rules}"""
+
 STYLE_RULES = """
 
 STYLE RULES (the candidate's own rules plus rules learned from their edits; follow them):
@@ -36,7 +42,7 @@ Return JSON:
   "seniority": "intern / new grad / junior / mid / senior / unclear",
   "summary": "two sentences: what this role is really about",
   "keywords": [{{"term": "exact phrase from the posting as an ATS would match it", "type": "hard" or "soft", "weight": "required" or "preferred" or "mentioned"}}],
-  "requirements": [{{"text": "requirement", "importance": "must" or "nice", "status": "covered" or "partial" or "missing", "fact_ids": ["ids proving it"], "comment": "one short reason"}}],
+  "requirements": [{{"text": "requirement", "importance": "must" or "nice", "kind": "skill" or "background" or "trait" or "logistics", "status": "covered" or "partial" or "missing", "evidence": "direct" or "transferable", "fact_ids": ["ids proving it"], "comment": "one short reason"}}],
   "company_facts": ["things the posting itself states about the company or team: products, mission, team, tech"],
   "eligibility": {{
     "work_authorization": "exact posting wording on visa / sponsorship / work authorization / citizenship, or empty",
@@ -72,6 +78,21 @@ Time management / follow-through = sustained commitments run in parallel (compet
 or volunteering alongside academic honors), an employer reference's assessment of output and reliability. Never cite a fact as \
 proof of a trait it doesn't show (individual athletics is not communication). A requirement with several parts \
 ("communication and a distributed environment") is "covered" only if every part is shown; name the unshown part in comment.
+- kind: "skill" = a tool, technology, method or technical domain; "background" = degree, field of study, years or \
+type of experience, coursework; "trait" = a soft skill, attitude or way of working; "logistics" = location, \
+on-site presence, start date or season, graduation window, enrollment, work authorization, travel.
+- evidence: "direct" when a cited fact literally shows the requirement (same tool, same skill, same degree). \
+"transferable" when it is shown by a fair interpretation rather than word for word; then say the link in comment \
+("four years of varsity sport alongside a full course load shows sustained discipline"). Fair interpretations: \
+NCAA D1 or national-team athletics = discipline, work ethic, time management, performing under pressure, \
+coachability, competitiveness; selection for a national team or an NCAA team = "partial" (transferable) for \
+teamwork and for leadership (team events, representing others, being trusted at a high level), "covered" only if a \
+fact shows a leading role (captain, mentoring, organizing); a finance degree or a bank internship = financial domain knowledge; a \
+quantitative degree or forecasting/statistics work = analytical or quantitative skills; building a project on \
+your own = initiative, self-direction, learning new tools quickly; a closely related tool = partial for the \
+asked tool (pandas for "data manipulation in Python" is direct; PyTorch for TensorFlow is partial and \
+transferable). Never interpret across a real gap: sport is not communication, a course is \
+not professional experience, using a tool is not years of it. For "missing" use "direct".
 - status "covered" only if the cited facts clearly demonstrate the requirement; "partial" if related but weaker; otherwise "missing" with an empty fact_ids list.
 - Only cite ids that exist in the fact bank.
 - company: the organisation that will employ the candidate. If COMPANY above is given, use it. Otherwise look for: \
@@ -224,6 +245,80 @@ KEEP these posting keywords, which the draft uses now (only drop one if a proble
 
 PREVIOUS DRAFT:
 {draft}
+
+PROBLEMS:
+{problems}"""
+
+REVISE_USER = """The candidate is editing the draft below and asks for a change in chat. Change only the texts the \
+request is about and leave every other text exactly as it is. Every ABSOLUTE RULE still applies: each text may only \
+say what its own SOURCES support, so if the request needs a claim the sources don't back, don't make it; say so in \
+"reply" instead. Respect the length limits: CV bullets at most {bullet_chars} characters, cover-letter paragraphs at \
+most {cl_chars} characters, the whole letter {cl_words_min}–{cl_words_max} words. **bold** marks bold text.
+
+COMPANY: {company}
+ROLE: {role}
+
+JOB POSTING ("jd"):
+\"\"\"
+{jd}
+\"\"\"
+
+CURRENT TEXTS (location · sources · text):
+{texts}
+
+CONVERSATION SO FAR:
+{history}
+
+REQUEST: {request}
+
+Return JSON: {{"edits": [{{"location": "one of the locations above", "text": "the full new text"}}], \
+"reply": "one or two plain sentences on what you changed, or why you couldn't"}}. Leave "edits" empty when \
+nothing should change."""
+
+ANSWERS_USER = """The candidate is filling in the application form for this job and needs short answers to the \
+questions below. Answer each one in the candidate's own voice (first person, plain, the voice of the cover letter), \
+from the fact bank and the posting only. Every ABSOLUTE RULE applies, and each answer lists the fact ids it relies \
+on in "sources" ("jd" for what the posting says about the company or role, "notes" for the candidate's notes).
+
+LENGTH: {words_min}–{words_max} words unless the question states a limit; a stated limit is a hard maximum \
+(the LIMIT line after a question). Answer the question asked, nothing around it.
+
+BY KIND OF QUESTION:
+- Why this role / company / team: one or two specific, true things the posting says about the work, product or \
+team, tied to the candidate's own work or reason (general.why_cs where it fits). No praise of the company, nothing \
+about it beyond the posting and the notes.
+- Which technologies, tools or methods are you comfortable with: name only skills that are in the fact bank, the \
+ones the posting asks for first, each tied to where it was used ("Python and FAISS in my local RAG pipeline"). \
+Never name a tool the posting wants but the facts don't have; if the posting's main tool is missing, leave it out.
+- A project, a challenge, a time you did X: one piece of work told with what was built, how, and the result.
+- Plain facts the fact bank answers (graduation, location, availability, degree): one sentence.
+- Work authorization, visa, sponsorship, salary, start date the facts don't give, references, or anything else the \
+facts can't answer: don't guess; write "[fill in: what the candidate must add]".
+
+COMPANY: {company}
+ROLE: {role}
+
+JOB POSTING ("jd"):
+\"\"\"
+{jd}
+\"\"\"
+
+CANDIDATE NOTES ABOUT THE COMPANY ("notes"):
+\"\"\"
+{notes}
+\"\"\"
+
+QUESTIONS:
+{questions}
+
+Return JSON: {{"answers": [{{"n": 1, "answer": "...", "sources": ["fact ids", "jd"]}}]}}, one per question, in order."""
+
+ANSWERS_FIX = """Your answers are below, followed by problems a fact-checker found. Return the FULL JSON again (same \
+schema, every question). For an unsupported claim: delete it or say only what the cited facts say. For a length \
+problem: shorten. For "Sounds like AI": rewrite plainly, keeping every fact.
+
+YOUR ANSWERS:
+{answers}
 
 PROBLEMS:
 {problems}"""

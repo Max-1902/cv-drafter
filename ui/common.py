@@ -8,9 +8,9 @@ import threading
 import altair as alt
 import streamlit as st
 
-from cvdrafter import config
+from cvdrafter import config, fit
 from cvdrafter import profile as prof
-from cvdrafter.textutil import safe
+from cvdrafter.textutil import safe, safe_html
 
 SERIES = "#54b8d3"
 CSS = """
@@ -44,6 +44,7 @@ h1,h2,h3{font-family:Inter,ui-sans-serif,system-ui,sans-serif!important;color:va
 .pill{display:inline-block;border-radius:4px;padding:3px 8px;font-size:.72rem;font-weight:550;margin:2px 3px 2px 0;border:1px solid #344554}.pill.ok{background:#102a2f;color:#7dd4cf;border-color:#24535b}.pill.no{background:#2c1b20;color:#e89a9a;border-color:#61333b}
 .src{font-size:.76rem;color:var(--muted);margin:-6px 0 10px}.eyebrow{font-family:ui-monospace,SFMono-Regular,monospace;font-size:.69rem;font-weight:650;letter-spacing:.12em;text-transform:uppercase;color:#68cce0}
 .hero{background:#101a23;border:1px solid #2b3a47;border-left:3px solid #36afc8;border-radius:6px;padding:22px 25px;margin:.2rem 0 1.1rem}.hero-title{font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:1.55rem;font-weight:700;letter-spacing:-.03em;color:var(--ink);margin:.3rem 0 .35rem}.hero-copy{color:#9aabb8;max-width:700px;font-size:.9rem;line-height:1.5}
+.fit{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-left:4px solid var(--c);border-radius:6px;padding:10px 14px;margin:6px 0 8px;background:#111a23}.fit .b{font-weight:700;color:var(--c);font-size:1.05rem;white-space:nowrap}.fit .n{font-family:ui-monospace,SFMono-Regular,monospace;font-weight:650;color:var(--c);font-size:1.4rem;line-height:1}.fit .m{font-size:.8rem;color:var(--muted)}.fit.strong{--c:#5fd39a}.fit.good{--c:#54b8d3}.fit.stretch{--c:#e3b85b}.fit.no{--c:#e88686}.fit.unclear{--c:#91a0ae}
 @media(max-width:800px){.block-container{padding-top:1rem}.hero{padding:18px}.hero-title{font-size:1.3rem}}
 </style>"""
 
@@ -441,3 +442,39 @@ def blocked_panel(key: str) -> bool:
     with st.popover("Render anyway"):
         st.write("Only if you've checked every problem above yourself. The render is marked as overridden in History.")
         return st.button("I checked them: render anyway", key=f"override_{key}", type="primary")
+
+
+def fit_card(analysis: dict, profile: dict, key: str) -> dict:
+    """The fit verdict for a posting as a coloured badge, with its reasons one click away."""
+    f = fit.assess(analysis or {}, profile)
+    detail = f["summary"].split(" · ", 1)[1] if " · " in f["summary"] else ""
+    score = f'<span class="n">{f["score"]}</span>' if f["score"] is not None else ""
+    st.markdown(f'<div class="fit {f["level"]}">{score}<div><div class="b">{f["verdict"]}</div>'
+                f'<div class="m">{safe_html(detail)}</div></div></div>', unsafe_allow_html=True)
+    with st.expander("Why this verdict", expanded=False, key=f"fitwhy_{key}"):
+        for title, items in (("Blockers", f["blockers"]), ("Strengths", f["strengths"]), ("Gaps", f["gaps"]),
+                             ("Worth checking", f["risks"])):
+            if items:
+                st.markdown(f"**{title}**\n" + bullets(items))
+        st.caption("Score: must-haves count 3x, nice-to-haves 1x, soft skills half. Direct evidence earns full credit, "
+                   "an interpretation (e.g. varsity sport for discipline) 80%, partial 50%. A missed must-have on "
+                   "location, dates, graduation or authorization, or a mid/senior role, makes it Not a fit.")
+        interpretation_form(profile, key)
+    return f
+
+
+def interpretation_form(profile: dict, key: str) -> None:
+    """Say once that one of your facts shows a skill or trait; every posting that asks for it counts it as met."""
+    facts = {i: f for i, f in prof.index_facts(profile).items() if f["section"] != "skills"}
+    with st.form(f"interp_{key}", clear_on_submit=True, border=False):
+        st.markdown("**Undersold? Count one of your facts for a skill or trait**")
+        fact = st.selectbox("Your fact", list(facts), format_func=lambda i: facts[i]["text"][:110])
+        shows = st.text_input("shows (comma-separated)", placeholder="leadership, teamwork")
+        why = st.text_input("Why (optional)", placeholder="captained the team for two years")
+        if st.form_submit_button("Confirm") and shows.strip():
+            prof.add_interpretation(fact, [s.strip() for s in shows.split(",") if s.strip()], why)
+            st.rerun()
+    n = len(prof.load_interpretations())
+    if n:
+        st.caption(f"{n} confirmed interpretation(s). They count for the fit verdict only; your CV and letter still say "
+                   "only what your facts say. Edit them in interpretations.yaml on Files & fact bank.")

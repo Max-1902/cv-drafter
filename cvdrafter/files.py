@@ -18,6 +18,7 @@ EDITABLE = {
     "style_rules.md": (config.STYLE_RULES_PATH, "markdown", "Voice and structure rules for every draft. Grows as the app learns from your edits."),
     "voice_sample.md": (config.VOICE_SAMPLE_PATH, "markdown", "A cover letter you wrote yourself. Drafts copy its voice and shape, and may reuse its lines about you."),
     "learned_facts.yaml": (config.LEARNED_FACTS_PATH, "yaml", "Facts you confirmed when answering gap questions."),
+    "interpretations.yaml": (config.INTERPRETATIONS_PATH, "yaml", "Skills and traits you confirmed a fact shows (e.g. team captain -> leadership). Used for the fit verdict, never as text on your CV."),
     "slots.yaml": (config.SLOTS_PATH, "yaml", "Layout limits (bullet length, counts, cover-letter words) and fixed labels."),
 }
 

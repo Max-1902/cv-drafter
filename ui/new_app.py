@@ -11,7 +11,7 @@ from cvdrafter.llm import LLMError
 from cvdrafter.preview import cl_html, cv_html, similarity, word_diff
 from cvdrafter.textutil import safe, safe_html
 from cvdrafter.verify import errors, iter_items, run_checks
-from ui.common import blocked_panel, bullets, download_buttons, kpi, load_profile_or_stop, match_panel, models, pills, render_checked, setup, show_issues
+from ui.common import blocked_panel, bullets, download_buttons, fit_card, kpi, load_profile_or_stop, match_panel, models, pills, render_checked, setup, show_issues
 
 setup()
 LIMITS = config.load_slots()["limits"]
@@ -56,6 +56,7 @@ def open_existing(app_id: int) -> None:
 
 
 if "open_app_id" in st.session_state:
+    st.session_state.pop("dup_pending", None)
     open_existing(st.session_state.pop("open_app_id"))
 
 
@@ -78,13 +79,27 @@ with st.expander("1 · Posting", expanded=cur is None):
         extra = st.text_input("Extra instructions (optional)", placeholder="e.g. lead with the RAG project")
         go = st.form_submit_button("Analyse posting", type="primary")
 
+def log_new(company, role, jd, notes, url, recipient, address, extra, analysis) -> dict:
+    app_id = memory.create_application(company, role, "en", jd, notes, analysis, url=url)
+    st.session_state.pop("result", None)
+    st.session_state.pop("files", None)
+    st.session_state["cur"] = dict(app_id=app_id, company=company, role=role, jd=jd, notes=notes,
+                                   recipient=recipient, address=address, extra=extra, analysis=analysis)
+    return st.session_state["cur"]
+
+
+def label(app: dict) -> str:
+    return f"#{app['id']} {app['company'] or '?'} · {app['role']} ({app['status']})"
+
+
 if go:
+    st.session_state.pop("dup_pending", None)
     if not jd.strip():
         st.error("Paste a job posting first.")
         st.stop()
-    if dup := memory.find_duplicate(jd, url):
-        st.info(f"There's already a posting just like it: #{dup['id']} {dup['company'] or '?'} · {dup['role']} ({dup['status']}). "
-                "Opened it below; nothing new was logged.")
+    dup = memory.find_duplicate(jd, url)
+    if dup and (dup["jd"] or "").strip():
+        st.info(f"You already have this posting: {label(dup)}. Opened it below; nothing new was logged.")
         open_existing(dup["id"])
         cur = st.session_state["cur"]
         go = False
@@ -97,11 +112,29 @@ if go:
             st.stop()
     company = company or analysis.get("company", "")
     role = role or analysis.get("role", "")
-    app_id = memory.create_application(company, role, "en", jd, notes, analysis, url=url)
-    st.session_state["cur"] = cur = dict(app_id=app_id, company=company, role=role, jd=jd, notes=notes,
-                                         recipient=recipient, address=address, extra=extra, analysis=analysis)
-    st.session_state.pop("result", None)
-    st.session_state.pop("files", None)
+    same = dup or memory.find_same_job(company, role)
+    if same and not (same["jd"] or "").strip():
+        memory.attach_posting(same["id"], jd, analysis, url)
+        st.success(f"That's {label(same)}, which you logged without its posting. The posting is attached to it now; "
+                   "nothing new was logged.")
+        open_existing(same["id"])
+        cur = st.session_state["cur"] = {**st.session_state["cur"], "recipient": recipient, "address": address, "extra": extra}
+    elif same:
+        st.session_state["dup_pending"] = dict(match=same["id"], company=company, role=role, jd=jd, notes=notes, url=url,
+                                               recipient=recipient, address=address, extra=extra, analysis=analysis)
+        open_existing(same["id"])
+        cur = st.session_state["cur"]
+    else:
+        cur = log_new(company, role, jd, notes, url, recipient, address, extra, analysis)
+
+if pending := st.session_state.get("dup_pending"):
+    match = memory.get(pending["match"])
+    st.warning(f"This looks like a job you already have: {label(match) if match else '#' + str(pending['match'])}, same "
+               "company and role, though the posting text differs. Opened it below; nothing new was logged.")
+    if st.button("It's a different opening: log it as new"):
+        st.session_state.pop("dup_pending")
+        log_new(**{k: v for k, v in pending.items() if k != "match"})
+        st.rerun()
 
 if not cur:
     st.info("Paste a posting above. You'll get a fit analysis first, then a tailored CV + cover letter.")
@@ -142,6 +175,7 @@ if elig.get("timing"):
 if a.get("fit_warning"):
     st.warning(f"Fit: {safe(a['fit_warning'])}")
 
+fit_card(a, profile, f"ed{cur['app_id']}")
 s = analyze.coverage_stats(a)
 c = st.columns(4)
 kpi(c[0], "Must-haves covered", f"{s['must_covered']}/{s['must_total']}")
@@ -152,7 +186,9 @@ kpi(c[3], "Missing", s["missing"])
 with st.expander("Requirements and keywords", expanded="result" not in st.session_state):
     st.dataframe(
         [{"Status": r["status"].title(), "Requirement": r["text"], "Type": r["importance"],
-          "Evidence": ", ".join(r["fact_ids"]), "Why": r["comment"]} for r in a["requirements"]],
+          "Kind": r.get("kind", "skill"), "Evidence": ", ".join(r["fact_ids"]),
+          "Match": "interpreted" if r.get("evidence") == "transferable" else "direct", "Why": r["comment"]}
+         for r in a["requirements"]],
         hide_index=True, width="stretch",
     )
     kw = a.get("keywords", [])
@@ -258,6 +294,45 @@ with left:
         flag = " · over limit" if n > limit else ""
         st.markdown(f'<div class="src">{n}/{limit} chars{flag} · sources: {safe_html(", ".join(item["sources"]))}</div>', unsafe_allow_html=True)
 
+    def chat_panel() -> None:
+        """Ask the AI to change texts: its edits land in the boxes below, then the fact check runs again.
+        Runs before the boxes are drawn, so it may still set their values."""
+        S, key = st.session_state, f"ed::{app_id}::"
+        log = S.setdefault(f"edchat::{app_id}", [])
+        with st.expander("Ask AI to change something", expanded=True):
+            for m in log[-6:]:
+                with st.chat_message(m["role"]):
+                    st.markdown(safe(m["content"]))
+            if S.get(f"edundo::{app_id}") and st.button("Undo last AI change", key=f"edundo_btn{app_id}"):
+                S.update({key + loc: text for loc, text in S.pop(f"edundo::{app_id}").items()})
+                log.append({"role": "assistant", "content": "Undone."})
+                st.rerun()
+            ask = st.chat_input("e.g. shorten the second bullet of my latest job, warmer opening in the letter", key=f"edask{app_id}")
+        if not ask:
+            return
+        texts = {loc: S.get(key + loc, item["text"]) for loc, _, item, _ in iter_items(draft)}
+        with st.spinner("Editing and re-checking…"):
+            try:
+                out = generate.revise_texts({**cur, "profile": profile}, generate.apply_edits(draft, texts), ask, log,
+                                            M["writer"])
+            except LLMError as e:
+                st.error(str(e))
+                return
+            log.append({"role": "user", "content": ask})
+            reply = out["reply"] or ("Done." if out["edits"] else "I didn't change anything.")
+            if out["edits"]:
+                S[f"edundo::{app_id}"] = {loc: texts[loc] for loc in out["edits"]}
+                S.update({key + loc: text for loc, text in out["edits"].items()})
+                issues = run_checks(current_draft(app_id, draft), profile, cur["analysis"], cur["jd"], cur["notes"],
+                                    LIMITS, M["checker"] if M["llm_check"] else None)
+                S["result"] = {**result, "issues": issues}
+                reply += f"\n\nChanged: {', '.join(out['edits'])}."
+                if errors(issues):
+                    reply += f" The fact check found {len(errors(issues))} error(s); see Fact check above, or Undo."
+        log.append({"role": "assistant", "content": reply})
+        st.rerun()
+
+    chat_panel()
     t_cv, t_cl, t_diff = st.tabs(["CV text", "Cover letter", "What changed vs. your facts"])
     with t_cv:
         st.caption("Only these texts change; everything else is locked from your profile. **bold** stays bold. "

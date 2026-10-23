@@ -170,3 +170,58 @@ def test_history_lets_you_rewrite_or_edit_a_blocked_letter(seeded_db, monkeypatc
     assert not at.exception, at.exception
     assert memory.get(seeded_db)["final"]["cover_letter"][0]["text"] == "My own wording."
     assert any(b.label == "Create Word files (with your edits)" for b in at.button)
+
+
+def test_editor_chat_edits_the_boxes_and_can_undo(seeded_db, monkeypatch):
+    from cvdrafter import generate
+    asked = []
+
+    def fake_revise(ctx, draft, request, history, model):
+        asked.append(request)
+        return {"edits": {"experience/acme/1": "A shorter classifier bullet"}, "reply": "Shortened it."}
+    monkeypatch.setattr(generate, "revise_texts", fake_revise)
+    at = AppTest.from_file(str(config.ROOT / "ui/new_app.py"), default_timeout=30)
+    at.session_state["open_app_id"] = seeded_db
+    at.session_state["llm_check"] = False
+    at.run()
+    box = f"ed::{seeded_db}::experience/acme/1"
+    before = at.session_state[box]
+    at.chat_input[0].set_value("make the first bullet shorter").run()
+    assert not at.exception, at.exception
+    assert asked == ["make the first bullet shorter"]
+    assert at.session_state[box] == "A shorter classifier bullet"
+    assert any("A shorter classifier bullet" == t.value for t in at.text_area)
+    assert any("Shortened it." in m.value for m in at.markdown)
+    next(b for b in at.button if b.label == "Undo last AI change").click().run()
+    assert not at.exception, at.exception
+    assert at.session_state[box] == before
+
+
+def test_fit_badge_and_confirming_an_interpretation(seeded_db):
+    from cvdrafter.profile import load_interpretations
+    at = AppTest.from_file(str(config.ROOT / "ui/new_app.py"), default_timeout=30)
+    at.session_state["open_app_id"] = seeded_db
+    at.run()
+    assert not at.exception, at.exception
+    assert any('class="fit ' in m.value for m in at.markdown)
+    shows = next(t for t in at.text_input if t.label == "shows (comma-separated)")
+    shows.input("leadership")
+    next(b for b in at.button if b.label == "Confirm").click().run()
+    assert not at.exception, at.exception
+    assert load_interpretations()[0]["shows"] == ["leadership"]
+
+
+def test_editor_attaches_a_posting_to_an_application_logged_without_one(monkeypatch):
+    from cvdrafter import analyze
+    imported = memory.create_application("Globex", "Data Science Intern", "en", "", "", {})
+    memory.update(imported, status="sent", sent_at="2026-10-01")
+    monkeypatch.setattr(analyze, "analyze_job", lambda jd, company, role, *a, **k: {
+        "company": "Globex", "role": "Data Science Intern", "keywords": [], "eligibility": {}, "job": {},
+        "requirements": [{"text": "Python", "importance": "must", "status": "covered", "fact_ids": ["acme.1"], "comment": ""}]})
+    at = AppTest.from_file(str(config.ROOT / "ui/new_app.py"), default_timeout=30).run()
+    n = len(memory.list_all())
+    next(t for t in at.text_area if t.label == "Job posting").input("Globex wants a data science intern. " * 20)
+    next(b for b in at.button if b.label == "Analyse posting").click().run()
+    assert not at.exception, at.exception
+    assert len(memory.list_all()) == n and memory.get(imported)["jd"].startswith("Globex wants")
+    assert any("attached to it" in s.value for s in at.success)

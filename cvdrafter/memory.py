@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
+from urllib.parse import parse_qs, urlsplit
 
 from . import config
 
@@ -16,17 +17,26 @@ STATUS_WEIGHT = {"offer": 2.0, "interview": 1.6, "sent": 1.0, "ready": 1.0, "rej
 
 _COLUMNS = ["id", "created_at", "company", "role", "language", "jd", "notes", "analysis_json",
             "generated_json", "final_json", "files_json", "status", "user_notes",
-            "sent_at", "follow_up_at", "prep_json", "url",
+            "sent_at", "follow_up_at", "prep_json", "answers_json", "url",
             "location", "work_mode", "employment_type", "salary", "deadline", "job_ref", "company_confidence"]
-_JSON = ("analysis", "generated", "final", "files", "prep")
+_JSON = ("analysis", "generated", "final", "files", "prep", "answers")
 # Pulled from the posting by the analyst and stored as plain columns, so the log table and SQL queries can use them.
 JOB_FIELDS = ("location", "work_mode", "employment_type", "salary", "deadline", "job_ref")
 # Columns added after the first release; init_db adds them to older databases.
-_MIGRATIONS = {"sent_at": "TEXT", "follow_up_at": "TEXT", "prep_json": "TEXT", "url": "TEXT DEFAULT ''",
+_MIGRATIONS = {"sent_at": "TEXT", "follow_up_at": "TEXT", "prep_json": "TEXT", "answers_json": "TEXT", "url": "TEXT DEFAULT ''",
                **{f: "TEXT DEFAULT ''" for f in JOB_FIELDS}, "company_confidence": "TEXT DEFAULT ''"}
 FOLLOW_UP_DAYS = 7
 # Share of word pairs two postings must have in common to count as the same posting pasted again.
 DUPLICATE_OVERLAP = 0.85
+# ...or share of the shorter posting's word pairs found in the longer one (the same posting with extra LinkedIn
+# boilerplate, or only part of it), once the shorter one is long enough to tell.
+DUPLICATE_CONTAINED, DUPLICATE_MIN_PAIRS = 0.9, 40
+# Query parameters that identify a job; everything else in a link (utm_, gh_src, trk…) is tracking.
+URL_ID_PARAMS = ("gh_jid", "jid", "jobid", "job_id", "currentjobid", "jk", "req", "reqid", "posting_id", "id")
+# Words in company names that don't tell two companies apart.
+GENERIC_NAME_WORDS = {"inc", "llc", "ltd", "lp", "llp", "co", "corp", "corporation", "company", "group", "holdings",
+                      "the", "and", "of", "unnamed", "startup", "a", "an"}
+ROLE_STOPWORDS = {"and", "the", "for", "with", "team", "program", "programme", "position", "role"}
 
 
 @contextmanager
@@ -191,16 +201,108 @@ def _shingles(text: str) -> set[str]:
     return {f"{a} {b}" for a, b in zip(words, words[1:])}
 
 
+def url_key(url: str) -> str:
+    """A job link without tracking: host (no www), path and the id parameters. Greenhouse and LinkedIn jobs reduce
+    to their job id, so the board link and the company-site link of one job match."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    parts = urlsplit(url if "://" in url else "https://" + url)
+    host, path = parts.netloc.lower().removeprefix("www."), parts.path.rstrip("/").lower()
+    query = {k.lower(): v[0] for k, v in parse_qs(parts.query).items() if v}
+    if m := re.search(r"greenhouse\.io/.*?/jobs/(\d+)", host + path):
+        return f"greenhouse:{m.group(1)}"
+    if query.get("gh_jid"):
+        return f"greenhouse:{query['gh_jid']}"
+    if "linkedin.com" in host and (m := re.search(r"/jobs/view/(?:[^/]*?-)?(\d+)", path) or
+                                   re.fullmatch(r"(\d+)", query.get("currentjobid", ""))):
+        return f"linkedin:{m.group(1)}"
+    ids = [f"{k}={query[k]}" for k in URL_ID_PARAMS if k in query and query[k].lower() not in path]
+    return host + path + ("?" + "&".join(ids) if ids else "")
+
+
+def _same_text(mine: set[str], theirs: set[str]) -> bool:
+    if not mine or not theirs:
+        return False
+    common = len(mine & theirs)
+    return (common / len(mine | theirs) >= DUPLICATE_OVERLAP
+            or (min(len(mine), len(theirs)) >= DUPLICATE_MIN_PAIRS and common / min(len(mine), len(theirs)) >= DUPLICATE_CONTAINED))
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def _name_cores(company: str) -> list[set[str]]:
+    """The distinctive words of a company name and of its alias in brackets: "DV Trading (DV Group)" ->
+    [{dv, trading}, {dv}]. Empty for names that say nothing ("Unnamed startup")."""
+    names = [re.sub(r"\(.*?\)", " ", company or "")] + re.findall(r"\((.*?)\)", company or "")
+    cores = [_words(n) - GENERIC_NAME_WORDS for n in names]
+    return [c for c in cores if c]
+
+
+def _role_stems(role: str) -> set[str]:
+    return {w[:5] for w in _words(role) if len(w) > 2 and w not in ROLE_STOPWORDS}
+
+
+def _same_company(a: str, b: str) -> bool:
+    words_a, words_b = _words(a), _words(b)
+    return any(core <= words_b for core in _name_cores(a)) or any(core <= words_a for core in _name_cores(b))
+
+
+def _same_role(a: str, b: str) -> bool:
+    sa, sb = _role_stems(a), _role_stems(b)
+    if not sa or not sb:
+        return False
+    small, large = sorted((sa, sb), key=len)
+    return len(sa & sb) / len(sa | sb) >= 0.6 or (len(small) >= 2 and small <= large)
+
+
+def _named_in(app: dict, text: str) -> bool:
+    """The posting names this application's company and nearly all of its role title."""
+    words, stems = _words(text), {w[:5] for w in _words(text)}
+    role = _role_stems(app["role"])
+    return (any(core <= words for core in _name_cores(app["company"])) and len(role) >= 2
+            and len(role & stems) / len(role) >= 0.8)
+
+
 def find_duplicate(jd: str, url: str = "") -> dict | None:
-    """An application already logged for this posting: same link, or nearly the same text. Checked before any AI call."""
-    mine = _shingles(jd)
-    for app in list_all():
-        if url and app["url"] and url.rstrip("/") == app["url"].rstrip("/"):
-            return app
-        theirs = _shingles(app["jd"])
-        if mine and theirs and len(mine & theirs) / len(mine | theirs) >= DUPLICATE_OVERLAP:
-            return app
+    """An application already logged for this posting, checked before any AI call: the same job link, nearly the
+    same text, or (for one logged without its posting, e.g. imported) a posting naming its company and role.
+    The result has "match": "link", "text" or "name"."""
+    mine, key = _shingles(jd), url_key(url)
+    apps = list_all()
+    for app in apps:
+        if key and app["url"] and key == url_key(app["url"]):
+            return {**app, "match": "link"}
+    for app in apps:
+        if _same_text(mine, _shingles(app["jd"])):
+            return {**app, "match": "text"}
+    for app in apps:
+        if not (app["jd"] or "").strip() and _named_in(app, jd):
+            return {**app, "match": "name"}
     return None
+
+
+def find_same_job(company: str, role: str, exclude: int | None = None) -> dict | None:
+    """An application with the same company and role, once the analysis has read them from a new posting."""
+    if not company or not role:
+        return None
+    return next((a for a in list_all() if a["id"] != exclude and _same_company(company, a["company"])
+                 and _same_role(role, a["role"])), None)
+
+
+def attach_posting(app_id: int, jd: str, analysis: dict, url: str = "") -> dict:
+    """Give an application logged without its posting (e.g. imported) the posting and its analysis. Status, dates,
+    notes and every detail you already entered stay; only empty job details are filled in from the posting."""
+    app = get(app_id)
+    job = analysis.get("job") or {}
+    fields = {"jd": jd, "analysis": analysis, **{f: str(job.get(f) or "") for f in JOB_FIELDS if not app[f] and job.get(f)}}
+    if url and not app["url"]:
+        fields["url"] = url
+    update(app_id, **fields)
+    log_event(app_id, "posting", "posting attached")
+    return get(app_id)
 
 
 def delete(app_id: int) -> None:

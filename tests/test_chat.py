@@ -52,7 +52,7 @@ def test_paste_logs_drafts_and_takes_commands(chat):
     app = memory.get(app["id"])
     assert app["generated"] and len(at.text_area) > 5  # draft written and editable on the right
 
-    at.text_area[0].set_value("My own bullet").run()
+    next(t for t in at.text_area if "::experience/" in (t.key or "")).set_value("My own bullet").run()
     assert "My own bullet" in str(memory.get(app["id"])["final"])
 
     at.chat_input[0].set_value("applied").run()
@@ -87,3 +87,51 @@ def test_paid_models_blocked_when_off(tmp_path, monkeypatch):
     config.save_settings({"allow_paid": True, "models": {}})
     monkeypatch.setattr(llm, "_openrouter", lambda *a, **k: '{"ok": true}')
     assert llm.chat_json("s", "u", "anthropic/claude-sonnet-4.5") == {"ok": True}
+
+
+def test_pasting_the_posting_of_an_imported_application_fills_it_in(chat, monkeypatch):
+    at = chat
+    imported = memory.create_application("Optiver", "Software Engineer Intern", "en", "", "", {})
+    memory.update(imported, status="sent", sent_at="2026-10-01")
+    at.chat_input[0].set_value(JD).run()
+    assert not at.exception, at.exception
+    assert len(memory.list_all()) == 1
+    app = memory.get(imported)
+    assert app["jd"] == JD and app["status"] == "sent" and app["analysis"]["requirements"]
+    assert any("attached the posting" in m.value for m in at.markdown)
+
+
+def test_same_job_with_other_text_waits_for_log_it_anyway(chat, monkeypatch):
+    at = chat
+    calls = []
+    real = analyze.analyze_job
+    monkeypatch.setattr(analyze, "analyze_job", lambda *a, **k: calls.append(1) or real(*a, **k))
+    first = memory.create_application("Optiver", "Software Engineer Intern", "en", "An older Optiver posting. " * 30, "", {})
+    at.chat_input[0].set_value(JD).run()
+    assert not at.exception, at.exception
+    assert len(memory.list_all()) == 1 and any("log it anyway" in m.value for m in at.markdown)
+    at.chat_input[0].set_value("log it anyway").run()
+    assert not at.exception, at.exception
+    assert len(memory.list_all()) == 2 and memory.list_all()[0]["id"] != first
+    assert len(calls) == 1  # the analysis was reused, not paid for twice
+
+
+def test_application_questions_are_answered_and_saved(chat, monkeypatch):
+    from cvdrafter import answers
+    at = chat
+    at.chat_input[0].set_value(JD).run()
+    app_id = memory.list_all()[0]["id"]
+    seen = []
+
+    def fake_answers(ctx, questions, writer, checker=None, progress=None):
+        seen.append(questions)
+        return [{"question": q, "answer": f"Answer to {q}", "sources": ["acme.1"], "issues": []} for q in questions]
+    monkeypatch.setattr(answers, "answer_questions", fake_answers)
+    box = next(t for t in at.text_area if t.label == "The form's questions, one per line")
+    box.input("Why are you interested in this position?\nWhat AI-specific technologies are you comfortable with?")
+    next(b for b in at.button if b.label == "Answer").click().run()
+    assert not at.exception, at.exception
+    assert seen == [["Why are you interested in this position?", "What AI-specific technologies are you comfortable with?"]]
+    saved = memory.get(app_id)["answers"]
+    assert [a["question"] for a in saved] == seen[0]
+    assert any("Answer to Why are you interested" in c.value for c in at.code)

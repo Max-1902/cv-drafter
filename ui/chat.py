@@ -1,26 +1,25 @@
 """Apply: paste a posting into the chat. It's logged, analysed and drafted on the right, where you edit everything."""
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 
 import streamlit as st
 
-from cvdrafter import analyze, assistant, config, default_cv, generate, memory
+from cvdrafter import analyze, answers, assistant, config, default_cv, fit, generate, memory
 from cvdrafter import profile as prof
 from cvdrafter.matches import match_map
 from cvdrafter.llm import LLMError
 from cvdrafter.preview import cl_html, cv_html
-from cvdrafter.textutil import safe, safe_html
+from cvdrafter.textutil import plain, safe, safe_html, word_count
 from cvdrafter.verify import errors, iter_items
-from ui.common import APP_DETAILS, CONFIDENCE, auto_write_toggle, blocked_panel, company_confidence, confirm_company_button, cost_line, download_buttons, load_chat, load_profile_or_stop, model_controls, models, paid_toggle, pills, render_checked, save_chat, setup, show_issues
+from ui.common import APP_DETAILS, CONFIDENCE, auto_write_toggle, blocked_panel, company_confidence, confirm_company_button, cost_line, download_buttons, fit_card, load_chat, load_profile_or_stop, model_controls, models, paid_toggle, pills, render_checked, save_chat, setup, show_issues
 
 setup()
 st.markdown("""<style>
 .block-container{padding-top:2.6rem;max-width:1680px}
 .hint{font-size:.75rem;color:#91a0ae}
-.fitbar{height:4px;border-radius:2px;background:#263642;overflow:hidden;margin:4px 0 6px}
-.fitbar>div{height:100%;background:#37b7d2}
 div[data-testid="stChatMessage"]{padding:.55rem .7rem}
 </style>""", unsafe_allow_html=True)
 M = models()
@@ -54,14 +53,11 @@ def draft_of(app: dict) -> dict | None:
 
 def logged_message(app: dict) -> str:
     a = app["analysis"] or {}
-    s = analyze.coverage_stats(a)
     details = " · ".join(safe(app.get(k)) for k, _ in APP_DETAILS if app.get(k))
-    missing = [r["text"] for r in a.get("requirements", []) if r["importance"] == "must" and r["status"] == "missing"]
     lines = [f"**Logged \\#{app['id']}: {safe(app['company']) or '?'} · {safe(app['role'])}**"]
     if details:
         lines.append(details)
-    lines.append(f"Must-haves covered: {s['must_covered']}/{s['must_total']}"
-                 + (f". Missing: {safe(', '.join(missing[:5]))}" if missing else ""))
+    lines.append(f"**Fit: {safe(fit.assess(a, profile)['summary'])}**")
     check = a.get("company_check") or {}
     if check.get("confidence") != "high":
         lines.append(f"I'm not sure about the company ({safe(check.get('source'))}). Tell me the right name if it's wrong.")
@@ -79,19 +75,49 @@ def logged_message(app: dict) -> str:
 
 # ---------------------------------------------------------------- actions (the chat and the buttons share these)
 
-def do_posting(text: str, write) -> None:
+def app_label(app: dict) -> str:
+    sent = f", applied {app['sent_at'][:10]}" if app.get("sent_at") else ""
+    return f"**\\#{app['id']} {safe(app['company']) or '?'} · {safe(app['role'])}** ({app['status']}{sent})"
+
+
+def attach(app: dict, text: str, analysis: dict, url: str) -> None:
+    """The posting of an application you logged without it: fill that one in instead of logging a new one."""
+    app = memory.attach_posting(app["id"], text, analysis, url)
+    S["active"] = app["id"]
+    bump(app["id"])
+    say(f"That's {app_label(app)}, which you logged without its posting. I attached the posting to it, so it "
+        f"has a fit verdict now: {safe(fit.assess(analysis, profile)['summary'])}. Nothing new was logged.")
+
+
+def do_posting(text: str, write, force: bool = False, analysis: dict | None = None) -> None:
+    """force: log it even if it looks like one you have (analysis: reuse the one already made for it)."""
     url = assistant.find_url(text)
-    if dup := memory.find_duplicate(text, url):
+    S.pop("dup_pending", None)
+    dup = None if force else memory.find_duplicate(text, url)
+    if dup and (dup["jd"] or "").strip():
         S["active"] = dup["id"]
-        say(f"There's already a posting just like it: **\\#{dup['id']} {safe(dup['company']) or '?'} · {safe(dup['role'])}** "
-            f"({dup['status']}). It's open on the right; nothing new was logged.")
+        say(f"You already have this posting: {app_label(dup)}. It's open on the right; nothing new was logged.")
         return
-    write("Reading the posting…")
-    analysis = analyze.analyze_job(text, "", "", profile, M["writer"], url=url)
-    if dup := memory.find_duplicate(text, url):  # the same paste, sent twice, finished first
-        S["active"] = dup["id"]
-        say(f"There's already a posting just like it: **\\#{dup['id']} {safe(dup['company']) or '?'} · {safe(dup['role'])}**.")
-        return
+    if analysis is None:
+        write("Reading the posting…")
+        analysis = analyze.analyze_job(text, "", "", profile, M["writer"], url=url)
+    if not force:
+        again = memory.find_duplicate(text, url)  # the same paste, sent twice, finished first
+        if again and (again["jd"] or "").strip():
+            S["active"] = again["id"]
+            say(f"You already have this posting: {app_label(again)}.")
+            return
+        same = dup or memory.find_same_job(analysis.get("company", ""), analysis.get("role", ""))
+        if same and not (same["jd"] or "").strip():
+            attach(same, text, analysis, url)
+            return
+        if same:
+            S["active"] = same["id"]
+            S["dup_pending"] = {"text": text, "analysis": analysis}
+            say(f"This looks like a job you already have: {app_label(same)}, same company and role, though the "
+                "posting text differs. It's open on the right and nothing new was logged. If it really is a "
+                "different opening, say *log it anyway*.")
+            return
     app_id = memory.create_application(analysis.get("company", ""), analysis.get("role", ""), "en", text, "", analysis, url=url)
     if assistant.says_applied(text):
         memory.mark_applied(app_id)
@@ -120,6 +146,18 @@ def do_draft(app_id: int, extra: str, write, tailor: bool | None = None) -> None
         + "Edit anything there, or tell me what to change.")
 
 
+def do_answers(app_id: int, questions: list[str], write) -> None:
+    app = memory.get(app_id)
+    ctx = dict(company=app["company"], role=app["role"], jd=app["jd"], notes=app["notes"] or "",
+               analysis=app["analysis"], profile=profile)
+    new = answers.answer_questions(ctx, questions, M["writer"], M["checker"] if M["llm_check"] else None, progress=write)
+    asked = {a["question"] for a in new}
+    memory.update(app_id, answers=new + [a for a in app["answers"] or [] if a["question"] not in asked])
+    n = sum(len(errors(a["issues"])) for a in new)
+    say(f"Answered {len(new)} question(s) for {safe(app['company'])}. They're under **Application questions** on the "
+        "right, ready to copy." + (f" {n} problem(s) are left; they're shown under the answers." if n else ""))
+
+
 def do_render(app_id: int, override: bool = False) -> dict | None:
     """None if the check found errors; the panel on the right then lists them."""
     app = memory.get(app_id)
@@ -129,7 +167,14 @@ def do_render(app_id: int, override: bool = False) -> dict | None:
     return files
 
 
+LOG_ANYWAY = re.compile(r"^\s*(log|add|save)( it| this)?( as new| as a new one)?( anyway)?|it'?s (a )?different|new (one|opening|application)\b", re.I)
+
+
 def do_command(text: str, write) -> None:
+    if S.get("dup_pending") and LOG_ANYWAY.search(text):
+        pending = S.pop("dup_pending")
+        do_posting(pending["text"], write, force=True, analysis=pending["analysis"])
+        return
     app = memory.get(S["active"]) if S.get("active") else None
     act = assistant.route(text, app, memory.list_all(), M["fast"])
     kind = act["action"]
@@ -192,9 +237,12 @@ def match_view(app: dict, draft: dict | None) -> None:
     icon = {"covered": "✅", "partial": "🟡", "missing": "❌"}
     rank = {"covered": 0, "partial": 1, "missing": 2}
     st.markdown("**How you match this posting**")
-    for r in sorted(a.get("requirements", []), key=lambda r: (r["importance"] != "must", rank.get(r["status"], 2))):
+    reqs = fit.apply_interpretations(a.get("requirements", []), prof.load_interpretations(), facts)
+    for r in sorted(reqs, key=lambda r: (r["importance"] != "must", rank.get(r["status"], 2))):
         evidence = [facts[i]["text"].split(" (skills:")[0] for i in r["fact_ids"] if i in facts]
         lines = [f"You: {'; '.join(evidence)}" if evidence else (r.get("comment") or "Nothing in your profile yet.")]
+        if evidence and r.get("evidence") == "transferable" and r.get("comment"):
+            lines.append(f"Interpreted: {r['comment']}")
         if draft and r["status"] != "missing":
             lines.append("In this draft: " + (", ".join(shown.get(r["text"]) or []) or "not used yet"))
         st.markdown(f'<div class="card"><div class="t">{icon.get(r["status"], "•")} {safe_html(r["text"])} '
@@ -202,17 +250,46 @@ def match_view(app: dict, draft: dict | None) -> None:
                     + "".join(f'<div class="m">{safe_html(x)}</div>' for x in lines) + "</div>", unsafe_allow_html=True)
 
 
+def answers_box(app: dict) -> None:
+    """Short answers to the application form's questions, saved with the application."""
+    app_id, saved = app["id"], app["answers"] or []
+    with st.expander(f"Application questions · {len(saved)} answered" if saved else "Application questions",
+                     expanded=bool(saved)):
+        if not (app["jd"] or "").strip():
+            st.caption("Paste this job's posting in the chat first; the answers are built from it and your facts.")
+            return
+        with st.form(f"qa_{app_id}", clear_on_submit=True, border=False):
+            text = st.text_area("The form's questions, one per line", height=90,
+                                placeholder="Why are you interested in this position?\n"
+                                            "What AI-specific technologies are you comfortable with? (max 500 characters)")
+            asked = st.form_submit_button("Answer")
+        if asked and (questions := answers.split_questions(text)):
+            S["chat"].append({"role": "user", "content": f" *{len(questions)} application question(s)*"})
+            S["pending"] = {"kind": "answers", "app_id": app_id, "questions": questions}
+            st.rerun()
+        if (S.get("pending") or {}).get("kind") == "answers" and S["pending"].get("app_id") == app_id:
+            st.info("Answering… they show up here in a moment.")
+        for a in saved:
+            st.markdown(f"**{safe(a['question'])}**")
+            st.code(a["answer"] or "(no answer)", language=None, wrap_lines=True)
+            text = plain(a["answer"])
+            st.caption(f"{word_count(text)} words · {len(text)} characters · sources: {safe(', '.join(a['sources'])) or 'none'}")
+            for i in a.get("issues") or []:
+                (st.error if i["level"] == "error" else st.warning)(safe(i["message"]))
+        if saved and st.button("Clear answers", key=f"qa_clear_{app_id}"):
+            memory.update(app_id, answers=None)
+            st.rerun()
+
+
 def panel(app: dict) -> None:
     app_id, v = app["id"], S["ver"].get(app["id"], 0)
     a = app["analysis"] or {}
     s = analyze.coverage_stats(a)
-    fit = s["must_covered"] / s["must_total"] if s["must_total"] else None
     st.markdown(f"#### {safe(app['company']) or '?'} · {safe(app['role'])}")
+    if a.get("requirements"):
+        fit_card(a, profile, f"chat{app_id}")
     st.markdown(f'<span class="hint">{app["status"].title()} · {CONFIDENCE.get(company_confidence(app), "")}'
-                + (f" · {s['must_covered']}/{s['must_total']} must-haves" if fit is not None else "")
-                + " · details and status on the History page</span>"
-                + (f'<div class="fitbar"><div style="width:{fit:.0%}"></div></div>' if fit is not None else ""),
-                unsafe_allow_html=True)
+                " · details and status on the History page</span>", unsafe_allow_html=True)
     confirm_company_button(app, f"chat{app_id}")
     draft = draft_of(app)
     with st.container(height=360, border=False):
@@ -248,6 +325,8 @@ def panel(app: dict) -> None:
         kw = a.get("keywords", [])
         st.markdown(pills([k["term"] for k in kw if k["in_profile"]], "ok") + " "
                     + pills([k["term"] for k in kw if not k["in_profile"]], "no"), unsafe_allow_html=True)
+
+    answers_box(app)
 
     if not draft:
         pending = S.get("pending") or {}
@@ -350,7 +429,8 @@ with right:
 
 job = S.pop("pending", None)
 if job:
-    labels = {"posting": "Logging and analysing the posting…", "command": "On it…", "draft": "Writing your CV + cover letter…"}
+    labels = {"posting": "Logging and analysing the posting…", "command": "On it…", "draft": "Writing your CV + cover letter…",
+              "answers": "Answering the application questions…"}
     with history, st.chat_message("assistant"), st.status(labels[job["kind"]], expanded=True) as box:
         def note(msg) -> None:
             try:
@@ -362,6 +442,8 @@ if job:
                 do_posting(job["text"], note)
             elif job["kind"] == "command":
                 do_command(job["text"], note)
+            elif job["kind"] == "answers":
+                do_answers(job["app_id"], job["questions"], note)
             else:
                 do_draft(job["app_id"], job.get("extra", ""), note, job.get("tailor"))
             box.update(state="complete")

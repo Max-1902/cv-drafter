@@ -73,6 +73,23 @@ def delete_learned_fact(fact_id: str) -> None:
     save_learned([i for i in load_learned() if i.get("id") != fact_id])
 
 
+def load_interpretations() -> list[dict]:
+    """[{fact: fact id, shows: [skills or traits], why}], confirmed by you. Only the fit verdict uses them."""
+    if not config.INTERPRETATIONS_PATH.exists():
+        return []
+    with open(config.INTERPRETATIONS_PATH, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or []
+    return [{"fact": str(r["fact"]), "shows": [str(s).strip() for s in r.get("shows") or [] if str(s).strip()],
+             "why": str(r.get("why") or "").strip()} for r in raw if isinstance(r, dict) and r.get("fact")]
+
+
+def add_interpretation(fact_id: str, shows: list[str], why: str = "") -> None:
+    items = load_interpretations()
+    items.append({"fact": fact_id, "shows": shows, "why": why.strip(), "added": date.today().isoformat()})
+    with open(config.INTERPRETATIONS_PATH, "w", encoding="utf-8") as f:
+        yaml.safe_dump(items, f, sort_keys=False, allow_unicode=True)
+
+
 def load_profile(path=None) -> dict:
     with open(path or config.PROFILE_PATH, encoding="utf-8") as f:
         return profile_from_raw(yaml.safe_load(f) or {})

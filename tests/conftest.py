@@ -13,6 +13,7 @@ def sample_data(tmp_path, monkeypatch):
     paths = {
         "PROFILE_PATH": FIXTURES / "profile.yaml",
         "GUARDRAILS_PATH": FIXTURES / "guardrails.yaml",
+        "INTERPRETATIONS_PATH": tmp_path / "interpretations.yaml",
         "LEARNED_FACTS_PATH": tmp_path / "learned_facts.yaml",
         "STYLE_RULES_PATH": tmp_path / "style_rules.md",
         "OUTPUT_DIR": tmp_path / "output",
@@ -36,7 +37,8 @@ def sample_data(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SETTINGS_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")  # saved chats etc.
     editable = {"profile.yaml": "PROFILE_PATH", "guardrails.yaml": "GUARDRAILS_PATH",
-                "learned_facts.yaml": "LEARNED_FACTS_PATH", "style_rules.md": "STYLE_RULES_PATH"}
+                "learned_facts.yaml": "LEARNED_FACTS_PATH", "style_rules.md": "STYLE_RULES_PATH",
+                "interpretations.yaml": "INTERPRETATIONS_PATH"}
     monkeypatch.setattr(files, "EDITABLE", {
         name: (paths[editable[name]], *rest) if name in editable else (path, *rest)
         for name, (path, *rest) in files.EDITABLE.items()

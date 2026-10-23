@@ -27,6 +27,7 @@ SETTINGS_PATH = DATA_DIR / "settings.json"  # model choices and the paid-models 
 LEARNED_FACTS_PATH = DATA_DIR / "learned_facts.yaml"
 STYLE_RULES_PATH = DATA_DIR / "style_rules.md"
 GUARDRAILS_PATH = DATA_DIR / "guardrails.yaml"
+INTERPRETATIONS_PATH = DATA_DIR / "interpretations.yaml"  # facts you confirmed show a trait, for the fit verdict
 DEFAULT_CV_PATH = DATA_DIR / "default_cv.yaml"  # reused when a posting doesn't need a tailored CV
 VOICE_SAMPLE_PATH = DATA_DIR / "voice_sample.md"
 SKILL_MAP_PATH = DATA_DIR / "skill_map.json"  # posting keyword -> canonical skill, for Insights

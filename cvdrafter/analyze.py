@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 from . import company as co
-from . import posting, prompts
+from . import fit, posting, prompts
 from .llm import chat_json
 from .memory import JOB_FIELDS
-from .profile import corpus, facts_for_prompt, index_facts
+from .profile import corpus, facts_for_prompt, index_facts, load_interpretations
 from .textutil import dedupe, has_term
 
 
 def analyze_job(jd: str, company: str, role: str, profile: dict, model: str, url: str = "") -> dict:
     jd = posting.clean(jd)
+    rules = load_interpretations()
+    system = prompts.ANALYST_SYSTEM + prompts.FACT_BANK.format(facts=facts_for_prompt(profile))
+    if rules:
+        system += prompts.INTERPRETATIONS.format(rules="\n".join(
+            f"  - {r['fact']} shows: {', '.join(r['shows'])}" + (f" ({r['why']})" if r["why"] else "") for r in rules))
     data = chat_json(
-        prompts.ANALYST_SYSTEM + prompts.FACT_BANK.format(facts=facts_for_prompt(profile)),
+        system,
         prompts.ANALYST_USER.format(company=company or "?", role=role or "?", url=url or "?", jd=jd),
         model,
         temperature=0.1,
@@ -27,11 +32,13 @@ def analyze_job(jd: str, company: str, role: str, profile: dict, model: str, url
         requirements.append({
             "text": r.get("text", ""),
             "importance": r.get("importance", "nice"),
+            "kind": r.get("kind") if r.get("kind") in fit.KINDS else "skill",
             "status": status,
+            "evidence": "transferable" if ids and r.get("evidence") == "transferable" else "direct",
             "fact_ids": ids,
             "comment": r.get("comment", ""),
         })
-    data["requirements"] = requirements
+    data["requirements"] = fit.apply_interpretations(requirements, rules, facts)
 
     keywords = []
     for k in data.get("keywords") or []:

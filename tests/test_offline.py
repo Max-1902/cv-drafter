@@ -501,3 +501,142 @@ def test_letter_drops_coursework_and_premature_finishing():
     assert "Lists coursework (Algorithms)" in msgs and "overstates" in msgs
     assert months_to_graduation({"personal": {"graduation": "Expected March 2028"}, "education": []},
                                 datetime(2026, 10, 22)) == 17
+
+
+def test_editor_chat_changes_only_known_texts_and_keeps_their_sources(monkeypatch):
+    from cvdrafter import generate
+    from cvdrafter.verify import iter_items
+    p = load_profile()
+    draft, _ = post_process(faithful_raw(p), p, LIMITS)
+    seen = []
+
+    def fake_writer(system, user, model, **k):
+        seen.append(user)
+        return {"edits": [{"location": "experience/acme/1", "text": "Built a Python classifier for 3 asset classes"},
+                          {"location": "experience/acme/2", "text": draft["experience"]["acme"][1]["text"]},  # unchanged
+                          {"location": "experience/nowhere/9", "text": "Invented slot"},
+                          {"location": "cover_letter/1", "text": ""}, "not an edit"],
+                "reply": "Shortened the first Acme bullet."}
+    monkeypatch.setattr(generate, "chat_json", fake_writer)
+    ctx = dict(company="X", role="Y", jd="We use Python.", notes="", analysis=ANALYSIS, profile=p)
+    out = generate.revise_texts(ctx, draft, "shorter first bullet", [{"role": "user", "content": "hi"}], "w")
+    assert out == {"edits": {"experience/acme/1": "Built a Python classifier for 3 asset classes"},
+                   "reply": "Shortened the first Acme bullet."}
+    assert "REQUEST: shorter first bullet" in seen[0] and "user: hi" in seen[0]
+    assert "experience/acme/1 · acme.1 ·" in seen[0]
+    new = generate.apply_edits(draft, out["edits"])
+    assert [i["sources"] for _, _, i, _ in iter_items(new)] == [i["sources"] for _, _, i, _ in iter_items(draft)]
+
+
+def _req(text, status="covered", importance="must", kind="skill", evidence="direct", comment=""):
+    return {"text": text, "status": status, "importance": importance, "kind": kind, "evidence": evidence,
+            "fact_ids": ["acme.1"] if status != "missing" else [], "comment": comment}
+
+
+def test_fit_verdict_levels_and_interpreted_evidence():
+    from cvdrafter import fit
+    strong = fit.assess({"seniority": "intern", "requirements": [_req("Python"), _req("SQL"), _req("CS degree", kind="background")]})
+    assert (strong["level"], strong["score"]) == ("strong", 100)
+    # discipline shown by varsity sport: an interpretation, worth 80% and explained in the strengths
+    sport = _req("Strong discipline", kind="trait", evidence="transferable", comment="5 years of varsity sport")
+    f = fit.assess({"requirements": [_req("Python"), sport]})
+    assert f["score"] == round(100 * (3 + 1.5 * 0.8) / 4.5)
+    assert "Strong discipline: 5 years of varsity sport" in f["strengths"] and "1 by interpretation" in f["summary"]
+    # one core must-have missing caps the verdict at "good", two at "stretch"
+    one = fit.assess({"requirements": [_req("Python"), _req("SQL"), _req("Java"), _req("C++", "missing"),
+                                       _req("Go", importance="nice")]})
+    assert one["level"] == "good" and "missing C++" in one["summary"]
+    two = fit.assess({"requirements": [_req("Python"), _req("SQL"), _req("C++", "missing"), _req("Rust", "missing")]})
+    assert two["level"] == "stretch"
+    assert fit.assess({"requirements": [_req("C++", "missing"), _req("Rust", "missing"), _req("Python", "partial")]})["level"] == "no"
+    # a missing soft skill costs less than a missing hard skill and never counts as a core gap
+    soft = fit.assess({"requirements": [_req("Python"), _req("SQL"), _req("Leadership", "missing", kind="trait")]})
+    assert soft["level"] == "good" and soft["score"] == 80
+    assert fit.assess({"requirements": []})["level"] == "unclear"
+
+
+def test_fit_blockers_and_risks():
+    from cvdrafter import fit
+    good = [_req("Python"), _req("SQL")]
+    onsite = fit.assess({"requirements": good + [_req("On-site in London", "missing", kind="logistics", comment="you're in Chicago")]})
+    assert onsite["level"] == "no" and onsite["blockers"] == ["On-site in London: you're in Chicago"]
+    assert onsite["score"] == 100  # logistics are pass/fail, not part of the score
+    assert fit.assess({"seniority": "senior", "requirements": good})["level"] == "no"
+    nice = fit.assess({"requirements": good + [_req("Start in May", "missing", importance="nice", kind="logistics")]})
+    assert nice["level"] == "strong" and nice["risks"] == ["Start in May"]
+    visa = {"requirements": good, "eligibility": {"excludes_visa_holders": True, "work_authorization": "No sponsorship"}}
+    assert fit.assess(visa)["level"] == "strong" and fit.assess(visa)["risks"] == ["Work authorization: No sponsorship"]
+    p = load_profile()
+    assert fit.assess(visa, {**p, "personal": {**p["personal"], "needs_sponsorship": True}})["level"] == "no"
+
+
+def test_fit_reads_analyses_saved_before_kind_and_evidence():
+    from cvdrafter import fit
+    old = {"requirements": [{"text": "Python", "importance": "must", "status": "covered", "fact_ids": ["acme.1"], "comment": ""},
+                            {"text": "C++", "importance": "must", "status": "missing", "fact_ids": [], "comment": ""}]}
+    f = fit.assess(old)
+    assert f["score"] == 50 and f["level"] == "stretch" and f["gaps"] == ["C++"]
+
+
+def test_analysis_keeps_kind_and_evidence_only_when_valid(monkeypatch):
+    from cvdrafter import analyze
+    reply = {"company": "Acme", "requirements": [
+        {"text": "Discipline", "importance": "must", "kind": "trait", "status": "covered", "evidence": "transferable",
+         "fact_ids": ["acme.1"], "comment": "sport"},
+        {"text": "Rust", "importance": "must", "kind": "wizardry", "status": "covered", "evidence": "transferable",
+         "fact_ids": ["nope.9"], "comment": ""}]}
+    monkeypatch.setattr(analyze, "chat_json", lambda *a, **k: reply)
+    monkeypatch.setattr(analyze.co, "resolve", lambda *a, **k: {"company": "Acme", "confidence": "high", "source": ""})
+    reqs = analyze.analyze_job("We want discipline.", "Acme", "Intern", load_profile(), "w")["requirements"]
+    assert (reqs[0]["kind"], reqs[0]["evidence"]) == ("trait", "transferable")
+    assert (reqs[1]["kind"], reqs[1]["status"], reqs[1]["evidence"]) == ("skill", "missing", "direct")  # no real evidence
+
+
+def test_confirmed_interpretations_count_as_met():
+    from cvdrafter import fit
+    from cvdrafter.profile import add_interpretation, load_interpretations
+    p = load_profile()
+    add_interpretation("acme", ["leadership", "teamwork"], "trusted with the bank's rules")
+    add_interpretation("gone.9", ["communication"])  # a fact that no longer exists is ignored
+    reqs = [_req("Python"), _req("Teamwork and leadership", "partial", kind="trait"),
+            _req("Excellent communication", "missing", kind="trait"),
+            _req("Leadership on site in NYC", "missing", kind="logistics")]
+    out = fit.apply_interpretations(reqs, load_interpretations(), __import__("cvdrafter.profile").profile.index_facts(p))
+    team = out[1]
+    assert (team["status"], team["evidence"], team["confirmed"]) == ("covered", "transferable", True)
+    assert "acme" in team["fact_ids"] and "shows leadership (trusted with the bank's rules)" in team["comment"]
+    assert out[2]["status"] == "missing" and out[3]["status"] == "missing" and out[0] == reqs[0]
+    before = fit.assess({"requirements": reqs}, p, rules=[])
+    after = fit.assess({"requirements": reqs}, p)
+    assert after["score"] > before["score"] and any("Teamwork and leadership" in s for s in after["strengths"])
+
+
+def test_form_question_limits_and_splitting():
+    from cvdrafter import answers
+    assert answers.limit("Why us? (max 500 characters)") == ("chars", 500)
+    assert answers.limit("Describe a project in 150 words or less.") == ("words", 150)
+    assert answers.limit("Why are you interested in this position?") is None
+    assert answers.split_questions("1. Why this role?\n(max 300 characters)\n\n- Which AI tools do you use?\n") == [
+        "Why this role? (max 300 characters)", "Which AI tools do you use?"]
+
+
+def test_form_answers_are_checked_and_fixed(monkeypatch):
+    from cvdrafter import answers
+    p = load_profile()
+    calls = []
+
+    def fake(system, user, model, **k):
+        calls.append(user)
+        if len(calls) == 1:  # an invented number and an answer over the question's limit
+            return {"answers": [{"n": 1, "answer": "I built a Python classifier used by 500 traders.", "sources": ["acme.1"]},
+                                {"n": 2, "answer": "word " * 40, "sources": ["acme.1"]}]}
+        return {"answers": [{"n": 1, "answer": "I built a Python news classifier that tags 3 asset classes.", "sources": ["acme.1"]},
+                            {"n": 2, "answer": "Python, at Acme Bank.", "sources": ["acme.1"]}]}
+    monkeypatch.setattr(answers, "chat_json", fake)
+    ctx = dict(company="X", role="AI Intern", jd="We use Python.", notes="", analysis=ANALYSIS, profile=p)
+    out = answers.answer_questions(ctx, ["Tell us about a project.", "Which tools? (max 100 characters)"], "w")
+    assert "LIMIT: 100 chars" in calls[0] and "Why this role" in calls[0]
+    fix = calls[1].split("PROBLEMS:")[-1]
+    assert "[answer 1]" in fix and "500" in fix and "[answer 2]" in fix and "allows 100" in fix
+    assert [a["answer"] for a in out] == ["I built a Python news classifier that tags 3 asset classes.", "Python, at Acme Bank."]
+    assert not any(errors(a["issues"]) for a in out)
