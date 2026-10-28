@@ -640,3 +640,107 @@ def test_form_answers_are_checked_and_fixed(monkeypatch):
     assert "[answer 1]" in fix and "500" in fix and "[answer 2]" in fix and "allows 100" in fix
     assert [a["answer"] for a in out] == ["I built a Python news classifier that tags 3 asset classes.", "Python, at Acme Bank."]
     assert not any(errors(a["issues"]) for a in out)
+
+
+def test_cv_as_one_text_round_trips_and_keeps_each_bullets_sources():
+    from cvdrafter import doctext
+    p = load_profile()
+    draft = post_process(faithful_raw(p), p, LIMITS)[0]
+    text = doctext.cv_to_text(draft, p)
+    acme = doctext.job_heading(p["experience"][0])
+    assert text.startswith(f"# EXPERIENCE\n\n## {acme}\n- ") and "# SKILLS" in text
+    same, problems = doctext.text_to_cv(text, draft, p)
+    assert problems == [] and same == draft  # reading back what it wrote changes nothing
+
+    lines = text.splitlines()
+    first = next(i for i, l in enumerate(lines) if l.startswith("- "))
+    sources = draft["experience"]["acme"][0]["sources"]
+    lines[first] = lines[first] + " and **more**"  # edited a little
+    del lines[first + 1]  # second bullet removed
+    lines.insert(first + 1, "- A line I added")  # and one added under it
+    out, problems = doctext.text_to_cv("\n".join(lines), draft, p)
+    acme = out["experience"]["acme"]
+    assert problems == [] and acme[0]["text"].endswith("and **more**") and acme[0]["sources"] == sources
+    assert acme[1] == {"text": "A line I added", "sources": draft["experience"]["acme"][1]["sources"]}  # took the removed bullet's
+    assert [b["text"] for b in acme[2:]] == [b["text"] for b in draft["experience"]["acme"][2:]]
+    assert draft["experience"]["acme"][0]["text"] in text  # the draft you passed in is untouched
+
+
+def test_cv_text_edits_skills_projects_and_explains_what_it_cannot_read():
+    from cvdrafter import doctext
+    p = load_profile()
+    draft = post_process(faithful_raw(p), p, LIMITS)[0]
+    text = doctext.cv_to_text(draft, p)
+    first_skill = draft["skills"][0]["category"]
+    out, problems = doctext.text_to_cv(text.replace(f"{first_skill}: ", f"{first_skill.lower()}: Rust, "), draft, p)
+    assert problems == [] and out["skills"][0]["category"] == first_skill and out["skills"][0]["items"][0] == "Rust"
+    names = [pr["name"] for pr in p["projects"]]
+    keep = names[0]  # leaving a project out of the text takes it off the CV
+    gone = text.split(f"## {names[1]}")[0] + "# SKILLS" + text.split("# SKILLS")[1] if len(names) > 1 and f"## {names[1]}" in text else text
+    out, _ = doctext.text_to_cv(gone, draft, p)
+    assert [x["id"] for x in out["projects"]][:1] == [p["projects"][0]["id"]] and keep in gone
+    for bad, why in (("## Somebody Else | CEO", "isn't a job"), ("# AWARDS", "unknown section")):
+        _, problems = doctext.text_to_cv(text.replace(f"## {doctext.job_heading(p['experience'][0])}", bad, 1) if bad.startswith("##")
+                                         else text + "\n" + bad, draft, p)
+        assert problems and why in problems[0]
+    _, problems = doctext.text_to_cv("loose text", draft, p)
+    assert "put this under" in problems[0]
+    _, problems = doctext.text_to_cv(text.replace(f"{first_skill}: ", f"{first_skill} "), draft, p)
+    assert "Category: skill" in problems[0]
+
+
+def test_letter_as_one_text_keeps_paragraph_sources():
+    from cvdrafter import doctext
+    p = load_profile()
+    draft = post_process(faithful_raw(p), p, LIMITS)[0]
+    text = doctext.letter_to_text(draft)
+    assert doctext.text_to_letter(text, draft) == draft
+    paragraphs = text.split("\n\n")
+    merged = "\n\n".join([paragraphs[0] + "\nwraps here", *paragraphs[2:]])  # a line break is a space; one paragraph deleted
+    out = doctext.text_to_letter(merged, draft)
+    assert out["cover_letter"][0]["text"].endswith(" wraps here") and len(out["cover_letter"]) == len(paragraphs) - 1
+    assert out["cover_letter"][0]["sources"] == draft["cover_letter"][0]["sources"]
+    assert out["cover_letter"][1]["sources"] == draft["cover_letter"][2]["sources"]
+
+
+def test_word_edits_are_read_back_into_the_draft(tmp_path, monkeypatch):
+    from docx import Document
+
+    from cvdrafter import doctext
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "out")
+    p = load_profile()
+    draft = post_process(faithful_raw(p), p, LIMITS)[0]
+    draft["experience"]["acme"][0]["text"] = "Built a **Python** classifier"
+    files = render.render_documents(draft, p, "Acme", "Intern")
+    assert doctext.read_docx(files["cv_docx"], "CV", draft, p) == (draft, [])  # an untouched Word file says what the draft says
+    assert doctext.read_docx(files["cl_docx"], "Cover letter", draft, p) == (draft, [])
+
+    cv = Document(files["cv_docx"])
+    bullets = [para for para in cv.paragraphs if para.text.startswith("❖") and "Wrote 120" in para.text]
+    bullets[0].runs[-1].text = bullets[0].runs[-1].text + " (typed in Word)"
+    gone = next(para for para in cv.paragraphs if "Cleaned survey data" in para.text)
+    gone._element.getparent().remove(gone._element)
+    cv.save(files["cv_docx"])
+    new, problems = doctext.read_docx(files["cv_docx"], "CV", draft, p)
+    assert problems == []
+    assert new["experience"]["acme"][1]["text"] == draft["experience"]["acme"][1]["text"] + " (typed in Word)"
+    assert new["experience"]["acme"][1]["sources"] == draft["experience"]["acme"][1]["sources"]
+    assert new["experience"]["acme"][0]["text"] == "Built a **Python** classifier"  # bold survives the round trip
+    assert len(new["experience"]["beta"]) == len(draft["experience"]["beta"]) - 1
+
+    letter = Document(files["cl_docx"])
+    body = next(para for para in letter.paragraphs if para.text.startswith("word word"))
+    body.runs[0].text = "Rewritten in Word."
+    for extra in body.runs[1:]:
+        extra.text = ""
+    letter.save(files["cl_docx"])
+    new, problems = doctext.read_docx(files["cl_docx"], "Cover letter", draft, p)
+    assert problems == [] and new["cover_letter"][0]["text"] == "Rewritten in Word."
+    assert new["cover_letter"][0]["sources"] == draft["cover_letter"][0]["sources"]
+
+    header = next(para for para in Document(files["cv_docx"]).paragraphs if para.text.startswith("Acme Bank |"))
+    doc = Document(files["cv_docx"])
+    next(para for para in doc.paragraphs if para.text.startswith("Acme Bank |")).runs[0].text = "Acme Corp | CEO | "
+    doc.save(files["cv_docx"])
+    assert "isn't a job" in doctext.read_docx(files["cv_docx"], "CV", draft, p)[1][0]
+    assert header is not None

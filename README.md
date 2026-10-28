@@ -50,8 +50,8 @@ writes. All of it lives on your Mac in `~/Library/Application Support/CV Drafter
 | Connect your Claude plan | Add facts by chatting or dropping files |
 |---|---|
 | ![Connect AI](docs/screenshots/connect.png) | ![Your profile](docs/screenshots/profile.png) |
-| **Overview** | **Pipeline** |
-| ![Overview](docs/screenshots/overview.png) | ![Pipeline](docs/screenshots/pipeline.png) |
+| **Overview** | **Applications** |
+| ![Overview](docs/screenshots/overview.png) | ![Applications](docs/screenshots/applications.png) |
 
 <sub>Screenshots show the fictional test profile "Jane Doe".</sub>
 
@@ -83,7 +83,7 @@ actions. Common commands (*applied*, *status interview*, *pdf*) need no AI at al
    (e.g. anything beyond what a reference letter in `data/references/` confirms). Enforced in code.
 8. **Render gate**: every render re-checks the exact text going into the file (rules + AI fact-check). If errors remain,
    nothing is rendered. "Render anyway" exists, but the render is then marked as overridden.
-9. **History and flags**: each render keeps its check result (✅ verified, 🟡 warnings, ❔ AI check didn't run,
+9. **Check state and flags**: each render keeps its check result (✅ verified, 🟡 warnings, ❔ AI check didn't run,
    ⛔ rendered despite errors). Flag a problem on any render; tick the box and it becomes a rule for every future draft.
 
 ## Privacy
@@ -112,6 +112,8 @@ If the AI undersells you, open "Why this verdict" and confirm that one of your f
 
 - **Duplicate postings**: paste a posting (or link) you already have and the app opens the existing application instead of logging and analysing it again. The same company and role from a different posting is flagged too.
 - **Application questions**: paste a form's questions ("Why this role? (max 500 characters)") and get short answers written from your facts in your letter's voice, checked like the letter and kept within each question's limit.
+- **Edit the document as one text**: the left side is your whole CV (or letter) as plain text, one line per bullet. Type, delete or add lines; the preview on the right follows when you click out of the text. Each line keeps the facts it cites, so the fact check still works. *Per bullet* switches to one box per bullet.
+- **Edit in Word**: under each Word download, *Edit in Word* opens the file in Word. After you save, *Use my Word edits in the app* reads your changes back (so the next render and the fact check start from them), and *Update PDF from Word edits* makes the PDF again.
 - **Ask AI to change something** (Detailed editor): edit the CV and letter texts from a chat message, only within each text's cited facts. The fact check re-runs, and you can undo it.
 
 ## How the design stays fixed
@@ -125,7 +127,7 @@ app warns you if the PDF runs longer. You can restyle the template in Word as lo
 
 - **Approved examples**: what you actually send becomes a style example for similar postings. Applications that got
   interviews count more.
-- **Learned style rules**: Pipeline → *Learn from edits* turns your edits into rules in `data/style_rules.md`.
+- **Learned style rules**: Applications → *Learn from edits* turns your edits into rules in `data/style_rules.md`.
 - **Gap answers**: when a posting asks for something missing from your profile and you really have it, add it as a fact.
   It's saved in `data/learned_facts.yaml` and used from then on.
 - **Insights**: the keywords postings ask for most, your gap radar, and which facts end up in interviews.
@@ -150,7 +152,7 @@ output/                  generated CVs and cover letters: one folder per applica
 Every analysed posting is saved to `data/applications.db` with the details the AI pulls from it: company, role,
 location, work mode, employment type, salary, deadline and job id. Click **📨 I applied today** and it's marked sent,
 dated, and gets a follow-up reminder 7 days later. Each status change is written to an `events` table, which is
-the timeline on the Pipeline page.
+the timeline you see when you open an application on the Applications page.
 
 **Finding the company.** Leave the Company field empty and the AI names the employer, quoting where it found it.
 It's told never to answer with an ATS or job board (Greenhouse, Workday, LinkedIn…). Code then checks that name

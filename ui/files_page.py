@@ -276,7 +276,7 @@ with t_out:
     if not folders:
         st.caption("Rendered CVs and cover letters will appear here.")
     else:
-        st.caption("Every render is kept as its own version. The History page shows them side by side.")
+        st.caption("Every render is kept as its own version. Each application's Versions tab shows them.")
     for folder in folders:
         fid = f"{folder.parent.name}_{folder.name}"
         with st.expander(f"{folder.parent.name} · {folder.name.replace('_', ' ')}"):

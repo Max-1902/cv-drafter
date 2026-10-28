@@ -46,8 +46,8 @@ with left:
             if coverage is not None:
                 detail += f' · {coverage:.0%} must-have coverage'
             st.markdown(f'<div class="card"><div class="t">{safe_html(app["company"] or "Company to confirm")} <span style="color:#91a0ae;font-weight:500">· {safe_html(app["role"])}</span></div><div class="m">{safe_html(detail)}</div></div>', unsafe_allow_html=True)
-        if st.button("View application pipeline"):
-            st.switch_page("ui/pipeline.py")
+        if st.button("View all applications"):
+            st.switch_page("ui/applications.py")
     st.subheader("Application activity")
     weekly = insights.weekly_counts(apps)
     if any(w["applications"] for w in weekly):

@@ -59,6 +59,29 @@ def to_pdf(docx: Path) -> Path | None:
     return pdf if (_word(docx, pdf) or _libreoffice(docx, pdf)) else None
 
 
+def open_in_word(path: str | Path) -> bool:
+    """Open a file in Word for hand editing (Word's own default for .docx when it isn't installed). False if it can't be opened."""
+    cmd = ["open", "-a", str(WORD_APP), str(path)] if WORD_APP.exists() else ["open", str(path)]
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def edited_since_pdf(docx: str | Path, pdf: str | Path) -> bool:
+    """True when the Word file was saved after its PDF was made, so the PDF no longer shows what the Word file says."""
+    docx, pdf = Path(docx), Path(pdf)
+    return docx.exists() and pdf.exists() and docx.stat().st_mtime > pdf.stat().st_mtime + 1
+
+
+def edited_since_render(docx: str | Path) -> bool:
+    """True when the Word file was saved after the app made it (render.json is written last in each render folder)."""
+    from .render import HISTORY_FILE
+    docx = Path(docx)
+    meta = docx.parent / HISTORY_FILE
+    return docx.exists() and meta.exists() and docx.stat().st_mtime > meta.stat().st_mtime + 1
+
+
 def page_count(pdf: Path) -> int:
     from pypdf import PdfReader
     return len(PdfReader(str(pdf)).pages)

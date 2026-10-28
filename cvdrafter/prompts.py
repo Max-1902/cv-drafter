@@ -152,7 +152,7 @@ true, specific thing the posting says the team does, and what about that work he
 and an honest limitation where the facts show one (what lost, what he changed because of it). One project per \
 paragraph. It may end with one short opinion of his own from the fact bank, but only one that this same project \
 earned; if none fits, end on the result.
-  4. Close with one human detail when the style rules allow it (e.g. golf), then location, graduation, \
+  4. Close with one human detail when the style rules allow it (e.g. a sport or hobby), then location, graduation, \
 availability and a short ask ("I'd welcome a conversation.").
 - No coursework in the letter (the CV already lists it). Describe the degree by its program and graduation date; \
 never "finishing" or "final year" unless graduation is under six months away.
@@ -292,8 +292,10 @@ ones the posting asks for first, each tied to where it was used ("Python and FAI
 Never name a tool the posting wants but the facts don't have; if the posting's main tool is missing, leave it out.
 - A project, a challenge, a time you did X: one piece of work told with what was built, how, and the result.
 - Plain facts the fact bank answers (graduation, location, availability, degree): one sentence.
-- Work authorization, visa, sponsorship, salary, start date the facts don't give, references, or anything else the \
-facts can't answer: don't guess; write "[fill in: what the candidate must add]".
+- Work authorization, visa, sponsorship: answer only from personal.work_authorization, citing it; for a yes/no \
+"will you require sponsorship" about an internship, the answer follows from it (CPT needs none).
+- Salary, start date the facts don't give, references, or anything else the facts can't answer: don't guess; write "[fill in: what the candidate must add]". Only for a question that asks for \
+it: never add eligibility, location or visa notes to an answer about something else.
 
 COMPANY: {company}
 ROLE: {role}

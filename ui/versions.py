@@ -1,5 +1,5 @@
-"""History: each application's details and timeline, every CV and cover letter generated, then every one rendered,
-newest first. Nothing generated or rendered is ever overwritten."""
+"""One application's versions: the drafts the writer produced and the Word files rendered from them, newest first with
+the older ones tucked underneath. Nothing generated or rendered is ever overwritten. Shown in the Applications detail."""
 from __future__ import annotations
 
 import subprocess
@@ -7,17 +7,13 @@ import sys
 
 import streamlit as st
 
-from cvdrafter import config, files, generate, memory
+from cvdrafter import config, docstate, files, generate, memory
 from cvdrafter.llm import LLMError
 from cvdrafter.preview import word_diff
 from cvdrafter.render import cv_text
 from cvdrafter.textutil import safe
 from cvdrafter.verify import errors
-from ui.common import (DOCX_MIME, application_card, blocked_panel, bullets, load_profile_or_stop, models, render_checked, setup,
-                       show_issues)
-
-setup()
-st.title("History")
+from ui.common import DOCX_MIME, blocked_panel, bullets, models, render_checked, show_issues
 
 
 def stamp(at: str | None) -> str:
@@ -25,24 +21,17 @@ def stamp(at: str | None) -> str:
     return (at or "").replace("T", " ")[:16]
 
 
-apps = memory.list_all()
-if apps:
-    st.subheader("Application details")
-    labels = {a["id"]: f"#{a['id']} {a['company'] or '?'} · {a['role']} ({a['status']})" for a in apps}
-    ids = list(labels)
-    active = st.session_state.get("active")  # the one open on the Apply page
-    chosen = st.selectbox("Application", ids, ids.index(active) if active in labels else 0, format_func=labels.get,
-                          label_visibility="collapsed")
-    application_card(memory.get(chosen), f"h{chosen}")
-    timeline = memory.events(chosen)
-    if timeline:
-        with st.expander(f"Timeline ({len(timeline)})"):
-            st.markdown(bullets(f"{stamp(e['at'])}: {e['detail'] or e['kind']}" for e in reversed(timeline)))
-    st.divider()
+def earlier(items: list, noun: str, label, key: str, show) -> None:
+    """The newest of `items` is shown by the caller; the rest sit in one expander, one picked at a time."""
+    if not items:
+        return
+    with st.expander(f"Earlier {noun} ({len(items)})"):
+        pos = st.selectbox(noun.capitalize(), range(len(items)), format_func=lambda i: label(items[i]), key=f"{key}_pick",
+                           label_visibility="collapsed")
+        show(items[pos])
 
-entries = files.history()
 
-# ---------------------------------------------------------------- generated (rendered or not)
+# ---------------------------------------------------------------- drafts (the text, rendered or not)
 
 def letter_problems(key: str) -> list[dict]:
     """The errors that stopped the last render and that a rewrite of the letter can fix (not the CV or the company)."""
@@ -93,12 +82,12 @@ def rewrite_result(app_id: int) -> None:
         st.success("Rewritten. The check found no problems in the letter. Create the Word files when it reads right.")
 
 
-def letter_editor(app: dict, draft: dict, key: str) -> None:
+def letter_editor(app: dict, draft: dict, key: str, limits: dict) -> None:
     """The newest letter, editable in place. Saved as your edit of this draft; the CV is untouched."""
     paragraphs = draft["cover_letter"]
     before = [p["text"].replace("**", "") for p in paragraphs]
     texts = [st.text_area(f"Paragraph {n}", text, key=f"{key}_p{n}", height=150) for n, text in enumerate(before, 1)]
-    lo, hi = LIMITS["cl_words"]["min"], LIMITS["cl_words"]["max"]
+    lo, hi = limits["cl_words"]["min"], limits["cl_words"]["max"]
     words = sum(len(t.split()) for t in texts)
     c1, c2 = st.columns([1, 3])
     (c2.success if lo <= words <= hi else c2.warning)(f"{words} words (target {lo}–{hi})")
@@ -110,110 +99,56 @@ def letter_editor(app: dict, draft: dict, key: str) -> None:
         st.rerun()
 
 
-generated = memory.drafts()
-st.subheader("Generated CVs + cover letters")
-st.caption("Every draft the writer produced, with when it was written. Regenerating adds a new one; earlier ones stay.")
-if not generated:
-    st.info("Each CV + cover letter you generate appears here, even before you create the Word files.")
-else:
-    profile = load_profile_or_stop()
-    LIMITS = config.load_slots()["limits"]
-    latest = {}  # app id -> its newest draft id
-    for d in generated:
-        latest.setdefault(d["app_id"], d["id"])
-    for i, d in enumerate(generated):
-        renders = sorted(e["rendered_at"] for e in entries if e.get("app_id") == d["app_id"] and e.get("rendered_at", "") >= d["at"])
-        state = f"✅ Word files created {stamp(renders[0])}" if renders else "📝 No Word files yet"
-        with st.expander(f"{stamp(d['at'])} · {d['company'] or '?'} · {d['role']} · {state}", expanded=i == 0):
-            app = memory.get(d["app_id"])
-            # The newest draft of an application carries the edits you made since; older ones render as written.
-            newest = d["id"] == latest[d["app_id"]]
-            edited = newest and app["final"]
-            draft = app["final"] if edited else d["draft"]
-            key = f"gen{d['id']}"
-            b1, b2, _ = st.columns([2, 2, 5])
-            render_now = b1.button("Create Word files" + (" (with your edits)" if edited else ""), key=key, type="primary",
-                                   width="stretch")
-            if newest and b2.button("Open in the editor", key=f"{key}_open", width="stretch",
-                                    help="Edit every CV bullet and letter paragraph with a live preview on the Apply page."):
-                st.session_state["open_app_id"] = app["id"]
-                st.switch_page("ui/new_app.py")
-            if render_now or blocked_panel(key):
-                out = render_checked(app, draft, profile, key, override=not render_now, make_pdf=True)
-                if out:
-                    memory.update(app["id"], files=out, status="ready" if app["status"] == "draft" else app["status"])
-                st.rerun()
-            fix_here = st.container()  # the rewrite box sits right under the problems when a render was stopped
-            if newest:
-                rewrite_result(app["id"])
-            t1, t2 = st.tabs(["CV", "Cover letter"])
-            with t1:
-                for section in cv_text(draft, profile):
-                    if section["bullets"]:
-                        st.markdown(f"**{safe(section['heading'])}**")
-                        st.markdown(bullets(section["bullets"]))
-            with t2:
-                paragraphs = [p["text"].replace("**", "") for p in draft["cover_letter"]]
-                if newest:
-                    with fix_here if letter_problems(key) else t2:
-                        letter_fixer(app, draft, key, profile)
-                    letter_editor(app, draft, key)
-                else:
-                    st.caption("An earlier draft, kept as it was written. Edit or rewrite the newest one.")
-                    for par in paragraphs:
-                        st.markdown(safe(par))
-                with st.popover("Copy text"):
-                    st.code("\n\n".join(paragraphs), language=None, wrap_lines=True)
-st.divider()
-
-# ---------------------------------------------------------------- rendered
-
-st.subheader("Rendered documents")
-st.caption("Every render is saved as a new version in output/. Your fact bank and templates are never changed by it.")
-
-if not entries:
-    st.info("Rendered CVs and cover letters will appear here, one entry per render.")
-    st.stop()
-
-BADGES = {"verified": "✅ Verified", "warnings": "🟡 Warnings", "unverified": "❔ AI check didn't run",
-          "errors": "⛔ Has errors", None: "❔ Not checked"}
+def newest_draft(app: dict, d: dict, renders: list[dict], profile: dict, limits: dict) -> None:
+    """The latest draft with everything you can do to it. An older draft is only shown (see old_draft)."""
+    # The newest draft carries the edits you made since; earlier ones render as written.
+    edited = app["final"]
+    draft = app["final"] if edited else d["draft"]
+    key = f"gen{d['id']}"
+    done = sorted(e["rendered_at"] for e in renders if e.get("rendered_at", "") >= d["at"])
+    st.markdown(f"**Draft written {stamp(d['at'])}** · " + (f"✅ Word files created {stamp(done[0])}" if done else "📝 No Word files yet"))
+    b1, b2, _ = st.columns([2, 2, 5])
+    render_now = b1.button("Create Word files" + (" (with your edits)" if edited else ""), key=key, type="primary",
+                           width="stretch")
+    if b2.button("Open in the editor", key=f"{key}_open", width="stretch",
+                 help="Edit every CV bullet and letter paragraph with a live preview on the Apply page."):
+        st.session_state["open_app_id"] = app["id"]
+        st.switch_page("ui/new_app.py")
+    if render_now or blocked_panel(key):
+        out = render_checked(app, draft, profile, key, override=not render_now, make_pdf=True)
+        if out:
+            memory.update(app["id"], files=out, status="ready" if app["status"] == "draft" else app["status"])
+        st.rerun()
+    fix_here = st.container()  # the rewrite box sits right under the problems when a render was stopped
+    rewrite_result(app["id"])
+    t_cv, t_cl = st.tabs(["CV", "Cover letter"])
+    with t_cv:
+        for section in cv_text(draft, profile):
+            if section["bullets"]:
+                st.markdown(f"**{safe(section['heading'])}**")
+                st.markdown(bullets(section["bullets"]))
+    with t_cl:
+        with fix_here if letter_problems(key) else t_cl:
+            letter_fixer(app, draft, key, profile)
+        letter_editor(app, draft, key, limits)
+        with st.popover("Copy text"):
+            st.code("\n\n".join(p["text"].replace("**", "") for p in draft["cover_letter"]), language=None, wrap_lines=True)
 
 
-def open_flags(e: dict, kind: str | None = None) -> list[dict]:
-    return [f for f in e.get("flags") or [] if not f["resolved"] and kind in (None, f.get("doc"))]
+def old_draft(d: dict, profile: dict) -> None:
+    st.caption("An earlier draft, kept as it was written. Edit or rewrite the newest one.")
+    t_cv, t_cl = st.tabs(["CV", "Cover letter"])
+    with t_cv:
+        for section in cv_text(d["draft"], profile):
+            if section["bullets"]:
+                st.markdown(f"**{safe(section['heading'])}**")
+                st.markdown(bullets(section["bullets"]))
+    with t_cl:
+        for p in d["draft"]["cover_letter"]:
+            st.markdown(safe(p["text"].replace("**", "")))
 
 
-def badge(e: dict, kind: str) -> str:
-    ev = e.get("evaluation") or {}
-    text = "⛔ Rendered despite errors" if ev.get("overridden") else BADGES.get(ev.get("status"))
-    n = len(open_flags(e, kind))
-    return text + (f" · 🚩 {n} flag(s)" if n else "")
-
-
-flagged = sum(len(open_flags(e)) for e in entries)
-risky = sum((e.get("evaluation") or {}).get("status") != "verified" for e in entries)
-c1, c2, c3 = st.columns(3)
-c1.metric("Renders", len(entries))
-c2.metric("Not fully verified", risky, help="Errors overridden, warnings, or the AI fact-check didn't run.")
-c3.metric("Open flags", flagged)
-only = st.toggle("Only show renders that need a look", value=False)
-
-companies = sorted({e.get("company", "") for e in entries})
-pick = st.multiselect("Company", companies, placeholder="All companies")
-shown = [e for e in entries if (not pick or e.get("company") in pick)
-         and (not only or (e.get("evaluation") or {}).get("status") != "verified" or open_flags(e))]
-
-
-def when(e: dict) -> str:
-    return stamp(e.get("rendered_at"))
-
-
-def previous(e: dict, kind: str) -> dict | None:
-    """The render before this one for the same application, to show what changed."""
-    same = [x for x in entries if x["folder"].parent == e["folder"].parent and x.get(kind)]
-    later = [x for x in same if x.get("rendered_at", "") < e.get("rendered_at", "")]
-    return later[0] if later else None
-
+# ---------------------------------------------------------------- renders (the Word files)
 
 def review(e: dict, kind: str, key: str) -> None:
     """The check results for this render, your flags, and a form to flag a new problem."""
@@ -265,16 +200,23 @@ def downloads(e: dict, kind: str, key: str) -> None:
         subprocess.run(["open", str(e["folder"])])
 
 
-t_cv, t_cl = st.tabs([f"CVs ({sum(bool(e.get('cv')) for e in shown)})",
-                      f"Cover letters ({sum(bool(e.get('cover_letter')) for e in shown)})"])
+def render_view(e: dict, renders: list[dict], key: str) -> None:
+    """One render: its CV and its letter, each with its check result, flags, downloads and the change since the render before."""
+    t_cv, t_cl = st.tabs([f"CV · {docstate.label(e, 'cv')}" if e.get("cv") else "CV",
+                          f"Cover letter · {docstate.label(e, 'cl')}" if e.get("cover_letter") else "Cover letter"])
+    older = [x for x in renders if x.get("rendered_at", "") < e.get("rendered_at", "")]
 
-with t_cv:
-    for i, e in enumerate(x for x in shown if x.get("cv")):
-        with st.expander(f"{when(e)} · {e.get('company', '')} · {e.get('role', '')} · {badge(e, 'cv')}", expanded=i == 0):
-            downloads(e, "cv", f"cv{i}")
-            review(e, "cv", f"cv{i}")
-            prev = previous(e, "cv")
-            diff = prev and st.toggle("Show changes since the previous render", key=f"cvd{i}")
+    def before(kind: str) -> dict | None:
+        return next((x for x in older if x.get(kind)), None)
+
+    with t_cv:
+        if not e.get("cv"):
+            st.caption("No CV in this render.")
+        else:
+            downloads(e, "cv", f"{key}_cv")
+            review(e, "cv", f"{key}_cv")
+            prev = before("cv")
+            diff = prev and st.toggle("Show changes since the previous render", key=f"{key}_cvd")
             for section in e["cv"]:
                 if not section["bullets"]:
                     continue
@@ -284,17 +226,43 @@ with t_cv:
                     st.markdown(word_diff(" • ".join(old), " • ".join(section["bullets"])), unsafe_allow_html=True)
                 else:
                     st.markdown(bullets(section["bullets"]))
-
-with t_cl:
-    for i, e in enumerate(x for x in shown if x.get("cover_letter")):
-        with st.expander(f"{when(e)} · {e.get('company', '')} · {e.get('role', '')} · {badge(e, 'cl')}", expanded=i == 0):
-            downloads(e, "cl", f"cl{i}")
-            review(e, "cl", f"cl{i}")
-            prev = previous(e, "cover_letter")
-            if prev and st.toggle("Show changes since the previous render", key=f"cld{i}"):
+    with t_cl:
+        if not e.get("cover_letter"):
+            st.caption("No cover letter in this render.")
+        else:
+            downloads(e, "cl", f"{key}_cl")
+            review(e, "cl", f"{key}_cl")
+            prev = before("cover_letter")
+            if prev and st.toggle("Show changes since the previous render", key=f"{key}_cld"):
                 st.markdown(word_diff("\n\n".join(prev["cover_letter"]), "\n\n".join(e["cover_letter"])), unsafe_allow_html=True)
             else:
                 for par in e["cover_letter"]:
                     st.markdown(safe(par))
             with st.popover("Copy text"):
                 st.code("\n\n".join(e["cover_letter"]), language=None, wrap_lines=True)
+
+
+# ---------------------------------------------------------------- the tab
+
+def panel(app: dict, renders: list[dict], profile: dict) -> None:
+    """Latest draft and latest render first; every earlier one underneath."""
+    limits = config.load_slots()["limits"]
+    drafts = memory.drafts(app["id"])
+    st.markdown("#### Draft")
+    if not drafts:
+        st.caption("Nothing generated yet. Open in editor to write the CV and cover letter.")
+    else:
+        newest_draft(app, drafts[0], renders, profile, limits)
+        earlier(drafts[1:], "drafts", lambda d: stamp(d["at"]), f"drafts{app['id']}", lambda d: old_draft(d, profile))
+    st.divider()
+    st.markdown("#### Word files")
+    st.caption("Every render is saved as a new version in output/. Your fact bank and templates are never changed by it.")
+    if not renders:
+        st.caption("No Word files yet.")
+        return
+    st.markdown(f"**Rendered {stamp(renders[0].get('rendered_at'))}**")
+    render_view(renders[0], renders, f"r{app['id']}_0")
+    earlier(renders[1:], "renders",
+            lambda e: f"{stamp(e.get('rendered_at'))} · CV {docstate.LABELS[docstate.check(e, 'cv')]} · "
+                      f"letter {docstate.LABELS[docstate.check(e, 'cl')]}",
+            f"renders{app['id']}", lambda e: render_view(e, renders, f"r{app['id']}_{e['folder'].name}"))

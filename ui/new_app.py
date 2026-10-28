@@ -42,7 +42,7 @@ def promote(app_id: int) -> dict:
 
 
 def open_existing(app_id: int) -> None:
-    """Load a saved application (from the Pipeline page) back into the editor."""
+    """Load a saved application (from the Applications page) back into the editor."""
     app = memory.get(app_id)
     st.session_state["cur"] = dict(app_id=app["id"], company=app["company"], role=app["role"], jd=app["jd"],
                                    notes=app["notes"] or "", recipient="", address="", extra="", analysis=app["analysis"])
@@ -155,7 +155,7 @@ check = a.get("company_check") or {}
 conf = saved.get("company_confidence") or check.get("confidence")
 if conf in ("low", "medium"):
     st.warning(f"Company “{safe(cur['company']) or '?'}” is a {conf}-confidence guess ({safe(check.get('source'))}). "
-               "Documents won't render until you confirm it, or correct it on the Applications log page.")
+               "Documents won't render until you confirm it, or correct it on the Applications page.")
     if st.button(f"“{cur['company'] or '?'}” is the right company", disabled=not cur["company"]):
         memory.update(cur["app_id"], company_confidence="high")
         st.rerun()
@@ -166,7 +166,7 @@ elig = a.get("eligibility") or {}
 if elig.get("excludes_visa_holders"):
     st.error(f"Posting appears to exclude visa holders or offer sponsorship: “{safe(elig.get('work_authorization'))}”")
 elif elig.get("work_authorization"):
-    st.warning(f"Work authorization mentioned: “{safe(elig['work_authorization'])}”. The letter gets a placeholder.")
+    st.warning(f"Work authorization mentioned: “{safe(elig['work_authorization'])}”. The letter states it from your profile (personal.work_authorization), or a placeholder if that is empty.")
 if elig.get("graduation_requirement"):
     st.warning(f"Graduation requirement: “{safe(elig['graduation_requirement'])}”. "
                f"Your graduation: {safe(prof.graduation(profile) or ' not in your profile')}.")
@@ -411,5 +411,5 @@ if files:
         st.error(f"The CV runs to {files['cv_pages']} pages. Untick a bullet or shorten some text, then render again.")
     if make_pdf and "cv_pdf" not in files:
         st.warning("PDF export failed. Open the .docx in Word and use File > Save as PDF.")
-    download_buttons(files, f"ed{app_id}")
+    download_buttons(files, f"ed{app_id}", app_id)
     st.caption("Once you've sent it, click  I applied today. Outcomes decide which past letters become style examples.")

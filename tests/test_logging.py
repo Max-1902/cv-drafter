@@ -75,7 +75,7 @@ def test_deleting_the_newest_application_leaves_no_gap_in_numbering():
 
 def test_job_links_match_without_tracking_and_across_boards():
     k = memory.url_key
-    assert k("https://akunacapital.com/careers/job/7773141/?gh_jid=7773141&gh_src=x") == k("boards.greenhouse.io/akuna/jobs/7773141")
+    assert k("https://harborcapital.com/careers/job/1234567/?gh_jid=1234567&gh_src=x") == k("boards.greenhouse.io/harbor/jobs/1234567")
     assert k("https://www.linkedin.com/jobs/view/4417664178/?trk=a") == k("https://www.linkedin.com/jobs/search/?currentJobId=4417664178")
     assert k("https://jobs.lever.co/optiver/123?utm_source=li") == k("jobs.lever.co/optiver/123/")
     assert k("https://x.com/careers?jobId=55&ref=mail") == "x.com/careers?jobid=55"
@@ -89,23 +89,23 @@ def test_duplicates_are_found_by_containment_and_by_name_for_postings_logged_wit
     boilerplate = "About the company. Show more. 1,234 followers. Apply now. Easy Apply. " * 5
     assert memory.find_duplicate(boilerplate + jd + boilerplate)["id"] == with_text  # LinkedIn wrapping
     assert memory.find_duplicate(jd[: len(jd) // 2])["match"] == "text"  # only part of it
-    imported = memory.create_application("Group One Trading", "Software Developer Intern", "en", "", "", {})
-    found = memory.find_duplicate("Group One Trading is hiring a Software Developer Intern for Summer 2027 in Chicago.")
+    imported = memory.create_application("Summit Trading", "Software Developer Intern", "en", "", "", {})
+    found = memory.find_duplicate("Summit Trading is hiring a Software Developer Intern for Summer 2027 in Chicago.")
     assert (found["id"], found["match"]) == (imported, "name")
-    spring = memory.create_application("Spring (working-capital fintech)", "Founding Engineer", "en", "", "", {})
-    assert memory.find_duplicate("Spring 2027 data analyst internship at a bank.") is None
-    assert memory.find_duplicate("Spring is hiring a Founding Engineer for AI agents.")["id"] == spring
-    assert memory.find_duplicate("Group One Trading is hiring a Quant Researcher.") is None  # same firm, other role
+    autumn = memory.create_application("Autumn (working-capital fintech)", "Founding Engineer", "en", "", "", {})
+    assert memory.find_duplicate("Autumn 2027 data analyst internship at a bank.") is None
+    assert memory.find_duplicate("Autumn is hiring a Founding Engineer for AI agents.")["id"] == autumn
+    assert memory.find_duplicate("Summit Trading is hiring a Quant Researcher.") is None  # same firm, other role
 
 
 def test_same_job_and_attaching_a_posting_keeps_what_you_entered():
     memory.init_db()
-    app_id = memory.create_application("DV Trading (DV Group)", "Student Developer Intern, equities desk", "en", "", "", {})
+    app_id = memory.create_application("Northwind Trading (Northwind Group)", "Student Developer Intern, equities desk", "en", "", "", {})
     memory.update(app_id, status="sent", sent_at="2026-10-20", location="Chicago", user_notes="C++ track")
-    assert memory.find_same_job("DV Group", "Student Developer Intern")["id"] == app_id
-    assert memory.find_same_job("DV Group", "Quantitative Trader") is None
-    assert memory.find_same_job("Akuna Capital", "Student Developer Intern") is None
-    analysis = {"company": "DV Group", "job": {"location": "New York", "salary": "$60/hr"}}
+    assert memory.find_same_job("Northwind Group", "Student Developer Intern")["id"] == app_id
+    assert memory.find_same_job("Northwind Group", "Quantitative Trader") is None
+    assert memory.find_same_job("Harbor Capital", "Student Developer Intern") is None
+    analysis = {"company": "Northwind Group", "job": {"location": "New York", "salary": "$60/hr"}}
     app = memory.attach_posting(app_id, "The posting text.", analysis, "https://dv.com/jobs/9")
     assert (app["jd"], app["status"], app["sent_at"], app["user_notes"]) == ("The posting text.", "sent", "2026-10-20", "C++ track")
     assert (app["location"], app["salary"], app["url"]) == ("Chicago", "$60/hr", "https://dv.com/jobs/9")  # only empty ones filled

@@ -348,23 +348,97 @@ def application_card(app: dict, key: str) -> None:
         confirm_company_button(app, key)
 
 
+def applied_box(app: dict, card_key: str) -> None:
+    """Log an application you sent after the fact: pick the day you sent it. A later status (interview…) is kept."""
+    from datetime import date
+
+    from cvdrafter import memory
+    if app["sent_at"]:
+        st.success(f"Applied on {app['sent_at'][:10]}. Change the date or status in the card above.")
+        return
+    with st.container(border=True):
+        st.markdown("**Not logged as applied yet**")
+        c1, c2, _ = st.columns([2, 2, 3], vertical_alignment="bottom")  # the button sits level with the date box
+        on = c1.date_input("Applied on", date.today(), max_value=date.today(), key=f"applied_on_{app['id']}")
+        if c2.button("I applied", key=f"applied_{app['id']}", type="primary", width="stretch",
+                     help=f"Logs it as sent on that day and sets a follow-up reminder {memory.FOLLOW_UP_DAYS} days later."):
+            memory.mark_applied(app["id"], on)
+            for k in [k for k in st.session_state if str(k).startswith(f"card::{card_key}::")]:
+                del st.session_state[k]  # so the card above shows the new status and dates
+            st.toast(f"Logged: applied to {app['company'] or '?'} on {on.isoformat()}.")
+            st.rerun()
+
+
+FIT_COLOR = {"strong": "green", "good": "blue", "stretch": "orange", "no": "red", "unclear": "gray"}
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def download_buttons(files: dict | None, key: str) -> bool:
-    """Word files first (the default), PDFs as a secondary option. False if nothing has been rendered yet."""
+def download_buttons(files: dict | None, key: str, app_id: int | None = None, can_pull: bool = False) -> bool:
+    """Word files first (the default), PDFs as a secondary option. False if nothing has been rendered yet.
+    Under each Word file: open it in Word to edit by hand, and once you've saved changes there, bring them into the app.
+    Under its PDF, once the Word file has been saved: update the PDF. app_id: the application the files belong to.
+    can_pull: the page can show the application's text again after Word edits are read into it (the Apply page can)."""
     from pathlib import Path
+
+    from cvdrafter import doctext, memory
+    from cvdrafter.pdf import edited_since_pdf, edited_since_render, open_in_word, page_count, to_pdf
     docs = {k: Path(v) for k, v in (files or {}).items() if k.endswith(("_docx", "_pdf")) and Path(v).exists()}
     if not docs:
         return False
     cols = st.columns(4)
     for col, (k, label) in zip(cols, (("cv_docx", "CV"), ("cl_docx", "Cover letter"), ("cv_pdf", "CV"), ("cl_pdf", "Cover letter"))):
         path = docs.get(k)
-        if path:
-            docx = k.endswith("_docx")
-            col.download_button(f"{label} (.{'docx' if docx else 'pdf'})", path.read_bytes(), file_name=path.name,
-                                mime=DOCX_MIME if docx else "application/pdf", type="primary" if docx else "secondary",
-                                key=f"dl_{key}_{k}", width="stretch")
+        if not path:
+            continue
+        docx = k.endswith("_docx")
+        col.download_button(f"{label} (.{'docx' if docx else 'pdf'})", path.read_bytes(), file_name=path.name,
+                            mime=DOCX_MIME if docx else "application/pdf", type="primary" if docx else "secondary",
+                            key=f"dl_{key}_{k}", width="stretch")
+        if docx:
+            if col.button("Edit in Word", key=f"word_{key}_{k}", width="stretch",
+                          help="Opens this file in Word. Save it there, and the download here is your edited version."):
+                if open_in_word(path):
+                    st.toast(f"{label} opened in Word. Save your changes there.")
+                else:
+                    col.error("Couldn't open it. Open the file from the folder shown under the Versions tab.")
+            read = (files or {}).get(f"{k}_read", 0)  # the Word file's time when its edits were last read into the app
+            if can_pull and app_id and edited_since_render(path) and path.stat().st_mtime > read + 1 and col.button(
+                    "Use my Word edits in the app", key=f"pull_{key}_{k}", width="stretch",
+                    help="Reads the text of the Word file you edited into the application, so the next render and the "
+                         "fact check start from it."):
+                app = memory.get(app_id)
+                new, problems = doctext.read_docx(path, label, app["final"] or app["generated"], load_profile_or_stop())
+                if problems:
+                    for problem in problems:
+                        col.error(safe(problem))
+                else:
+                    memory.update(app_id, final=new, files={**files, f"{k}_read": path.stat().st_mtime})
+                    memory.log_event(app_id, "edited", f"{label} edited by hand in Word; read into the app")
+                    ver = st.session_state.setdefault("ver", {})
+                    ver[app_id] = ver.get(app_id, 0) + 1  # the Apply page's editors show the new text
+                    st.rerun()
+        elif edited_since_pdf(path.with_suffix(".docx"), path) and col.button(
+                "Update PDF from Word edits", key=f"pdf_{key}_{k}", width="stretch",
+                help="You saved changes to the Word file after this PDF was made. Makes the PDF again from it."):
+            with st.spinner("Making the PDF from your edited Word file…"):
+                done = to_pdf(path.with_suffix(".docx"))
+            if not done:
+                col.error("The PDF couldn't be made. In Word use File > Save as PDF.")
+            else:
+                if k == "cv_pdf":
+                    files["cv_pages"] = page_count(done)
+                if app_id:
+                    memory.update(app_id, files=files)
+                    memory.log_event(app_id, "edited", f"{label} edited by hand in Word; PDF updated")
+                st.rerun()
+    if any(edited_since_pdf(p.with_suffix(".docx"), p) for p in docs.values() if p.suffix == ".pdf") or any(
+            edited_since_render(p) and p.stat().st_mtime > (files or {}).get(f"{k}_read", 0) + 1
+            for k, p in docs.items() if k.endswith("_docx")):
+        st.caption("The Word file was edited after it was made. Rendering again starts from the app's saved text, and the "
+                   "checks read that text too, so your Word changes only carry over once you use them in the app."
+                   if can_pull else
+                   "The Word file was edited after it was made. Rendering again starts from the app's saved text, "
+                   "so your Word changes aren't carried over; the checks also read the saved text, not the Word file.")
     return True
 
 
@@ -440,7 +514,7 @@ def blocked_panel(key: str) -> bool:
     st.error(f"Not rendered: {ev['errors']} problem(s) in the text. Fix them (or rewrite), then render again.")
     show_issues([i for i in ev["issues"] if i["level"] == "error"])
     with st.popover("Render anyway"):
-        st.write("Only if you've checked every problem above yourself. The render is marked as overridden in History.")
+        st.write("Only if you've checked every problem above yourself. The render is marked as overridden under Versions.")
         return st.button("I checked them: render anyway", key=f"override_{key}", type="primary")
 
 

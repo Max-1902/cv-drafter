@@ -83,8 +83,8 @@ I wrote these as rule checks in `verify.check_deterministic()`. Each one is an e
 |---|---|
 | My facts, guardrails, style rules | `data/*.yaml`, `data/*.md`: plain files I can edit by hand. Every in-app save backs up the old version to `data/.versions/`. |
 | Applications, status timeline, LLM call log | `data/applications.db` (`memory.py`). New columns get added automatically on startup. |
-| Every generated CV + cover letter | `drafts` table in `data/applications.db`, one timestamped row per generation, so regenerating never loses the earlier draft. The History page lists them. |
-| Rendered documents | `output/<company>_<role>_<id>/<timestamp>/`, plus a `render.json` the History page reads |
+| Every generated CV + cover letter | `drafts` table in `data/applications.db`, one timestamped row per generation, so regenerating never loses the earlier draft. The Versions tab of an application lists them. |
+| Rendered documents | `output/<company>_<role>_<id>/<timestamp>/`, plus a `render.json` the Versions tab reads |
 
 ## Models
 

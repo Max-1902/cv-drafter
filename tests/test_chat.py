@@ -50,8 +50,19 @@ def test_paste_logs_drafts_and_takes_commands(chat):
     at.chat_input[0].set_value("write it").run()
     assert not at.exception, at.exception
     app = memory.get(app["id"])
-    assert app["generated"] and len(at.text_area) > 5  # draft written and editable on the right
+    assert app["generated"] and not at.exception
+    doc_box = next(t for t in at.text_area if (t.key or "").startswith("doc::"))  # the whole CV as one text, on the left
+    assert "# EXPERIENCE" in doc_box.value and "Built a Python news classifier" in doc_box.value
+    doc_box.set_value(doc_box.value.replace("Built a Python news classifier", "Built my own classifier")).run()
+    assert not at.exception, at.exception
+    assert "Built my own classifier" in str(memory.get(app["id"])["final"])
+    bad = next(t for t in at.text_area if (t.key or "").startswith("doc::"))
+    bad.set_value(bad.value.replace("## Acme Bank | Software Engineering Intern", "## Acme Bank | Chief Executive")).run()
+    assert any("isn't a job" in e.value for e in at.error)  # explained, and nothing was saved from it
+    assert "Chief Executive" not in str(memory.get(app["id"])["final"])
 
+    next(g for g in at.segmented_control if g.key == "edit_layout").set_value("Per bullet").run()
+    assert len(at.text_area) > 5
     next(t for t in at.text_area if "::experience/" in (t.key or "")).set_value("My own bullet").run()
     assert "My own bullet" in str(memory.get(app["id"])["final"])
 
@@ -62,8 +73,10 @@ def test_paste_logs_drafts_and_takes_commands(chat):
     at.chat_input[0].set_value("the pay is 65 an hour").run()
     assert memory.get(app["id"])["salary"] == "$65/hr"
     assert not at.exception, at.exception
-    hist = AppTest.from_file(str(config.ROOT / "ui/history_page.py"), default_timeout=30).run()  # details now live on the History page
-    assert not hist.exception and any(t.value == "$65/hr" for t in hist.text_input)
+    page = AppTest.from_file(str(config.ROOT / "ui/applications.py"), default_timeout=30)  # details live on the Applications page
+    page.query_params["app"] = str(app["id"])
+    page.run()
+    assert not page.exception and any(t.value == "$65/hr" for t in page.text_input)
 
 
 def test_message_kinds():
@@ -135,3 +148,22 @@ def test_application_questions_are_answered_and_saved(chat, monkeypatch):
     saved = memory.get(app_id)["answers"]
     assert [a["question"] for a in saved] == seen[0]
     assert any("Answer to Why are you interested" in c.value for c in at.code)
+
+
+def test_workspace_shows_editor_and_preview_together_and_folds_the_chat(chat):
+    at = chat
+    at.chat_input[0].set_value(JD).run()
+    assert not at.exception, at.exception
+    assert [t.label for t in at.tabs][:2] == ["Match details", "Fit"]  # details sit in secondary tabs, not stacked panels
+    at.chat_input[0].set_value("write it").run()
+    assert not at.exception, at.exception
+    doc = at.get("segmented_control")[0]
+    assert doc.proto.options[0].content == "CV" and doc.proto.options[1].content == "Cover letter"
+    assert any((t.key or "").startswith("doc::") for t in at.text_area)  # the CV editor is showing, as one text
+    next(g for g in at.segmented_control if g.key == "edit_layout").set_value("Per bullet").run()
+    assert any(k for k in (t.key for t in at.text_area) if "::experience/" in (k or ""))
+    assert any("zoom:.66" in h.proto.body for h in at.get("html"))  # with its live preview beside it
+    assert any(e.label.startswith("Chat") and not e.proto.expanded for e in at.expander)  # the chat folds away once there is a draft
+    next(g for g in at.segmented_control if g.key == "doc_view").set_value("Cover letter").run()
+    assert not at.exception, at.exception
+    assert any("::cover_letter/" in (t.key or "") for t in at.text_area)

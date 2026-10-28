@@ -166,6 +166,8 @@ def index_facts(p: dict) -> dict[str, dict]:
 
     if p["personal"].get("location"):
         add("personal.location", f"Based in {p['personal']['location']}", "personal")
+    if p["personal"].get("work_authorization"):
+        add("personal.work_authorization", p["personal"]["work_authorization"], "personal")
     for section in ENTRY_SECTIONS:
         for e in p[section]:
             add(e["id"], entry_header(e, section), section, e["id"])
@@ -214,8 +216,12 @@ def facts_for_prompt(p: dict) -> str:
         if p[name]:
             lines.append(f"## {name.upper()}")
             lines += [f"  - {prefix}.{i}: {t}" for i, t in enumerate(p[name], 1)]
-    if p["personal"].get("location"):
-        lines.append(f"## PERSONAL\n  - personal.location: Based in {p['personal']['location']}")
+    personal = [f"  - personal.location: Based in {p['personal']['location']}"] if p["personal"].get("location") else []
+    if p["personal"].get("work_authorization"):
+        personal.append(f"  - personal.work_authorization: {p['personal']['work_authorization']}"
+                        "  (only when the posting or question raises work authorization)")
+    if personal:
+        lines += ["## PERSONAL"] + personal
     return "\n".join(lines)
 
 

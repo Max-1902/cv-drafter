@@ -175,6 +175,12 @@ def events(app_id: int) -> list[dict]:
         return [dict(r) for r in c.execute("SELECT * FROM events WHERE app_id = ? ORDER BY id", (app_id,)).fetchall()]
 
 
+def last_activity() -> dict[int, str]:
+    """Application id -> time of its newest event (generated, rendered, status change…)."""
+    with _conn() as c:
+        return {r["app_id"]: r["at"] for r in c.execute("SELECT app_id, MAX(at) AS at FROM events GROUP BY app_id")}
+
+
 def drafts(app_id: int | None = None) -> list[dict]:
     """Every generated CV + cover letter, newest first, with the company and role of its application."""
     where, args = ("WHERE d.app_id = ?", (app_id,)) if app_id is not None else ("", ())
@@ -234,8 +240,8 @@ def _words(text: str) -> set[str]:
 
 
 def _name_cores(company: str) -> list[set[str]]:
-    """The distinctive words of a company name and of its alias in brackets: "DV Trading (DV Group)" ->
-    [{dv, trading}, {dv}]. Empty for names that say nothing ("Unnamed startup")."""
+    """The distinctive words of a company name and of its alias in brackets: "Northwind Trading (Northwind Group)" ->
+    [{northwind, trading}, {northwind}]. Empty for names that say nothing ("Unnamed startup")."""
     names = [re.sub(r"\(.*?\)", " ", company or "")] + re.findall(r"\((.*?)\)", company or "")
     cores = [_words(n) - GENERIC_NAME_WORDS for n in names]
     return [c for c in cores if c]

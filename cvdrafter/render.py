@@ -13,7 +13,7 @@ from .pdf import page_count, to_pdf
 from .textutil import slug
 
 BOLD_RE = re.compile(r"(\*\*.+?\*\*)")
-HISTORY_FILE = "render.json"  # what was generated, read by the History page
+HISTORY_FILE = "render.json"  # what was generated, read by the Versions tab
 
 
 def rich(text: str) -> RichText:
@@ -96,7 +96,7 @@ def _render(template: Path, context: dict, out: Path) -> Path:
 
 
 def cv_text(draft: dict, profile: dict) -> list[dict]:
-    """The tailored parts of a CV as plain text, one entry per job or project, for the history page."""
+    """The tailored parts of a CV as plain text, one entry per job or project, for the Versions tab."""
     projects = {p["id"]: p for p in profile["projects"]}
     out = [{"heading": f"{job.get('company', '')} | {job.get('title', '')}",
             "bullets": [b["text"].replace("**", "") for b in draft["experience"].get(job["id"], [])]}
